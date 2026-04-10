@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .core.config import AppConfig, load_frontend_settings
 from .core.logging import configure_logging
-from .providers import ClaudeProvider, CodexProvider
+from .providers import ClaudeProvider, CodexProvider, GeminiProvider
 
 
 logger = logging.getLogger(__name__)
@@ -71,8 +71,14 @@ def _install_hooks(config: AppConfig) -> None:
         hook_script_source_path=config.codex_hook_script_source_path,
         managed_hook_script_paths=(config.codex_hook_script_source_path,),
     )
+    gemini = GeminiProvider(
+        settings_path=config.gemini_settings_path,
+        tmp_dir=config.gemini_tmp_dir,
+        hook_command_prefix=config.hook_command_prefix,
+    )
     claude.install_hooks()
     codex.install_hooks()
+    gemini.install_hooks()
 
 
 def _uninstall_hooks(config: AppConfig) -> None:
@@ -91,8 +97,14 @@ def _uninstall_hooks(config: AppConfig) -> None:
         hook_script_source_path=config.codex_hook_script_source_path,
         managed_hook_script_paths=(config.codex_hook_script_source_path,),
     )
+    gemini = GeminiProvider(
+        settings_path=config.gemini_settings_path,
+        tmp_dir=config.gemini_tmp_dir,
+        hook_command_prefix=config.hook_command_prefix,
+    )
     claude.uninstall_hooks()
     codex.uninstall_hooks()
+    gemini.uninstall_hooks()
 
 
 def daemon(args: argparse.Namespace) -> int:

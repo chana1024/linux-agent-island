@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import shlex
 import time
 from pathlib import Path
+from typing import Any
 
 from ..core.models import AgentSession, SessionPhase
 
@@ -32,6 +34,22 @@ def _looks_like_managed_legacy_command(command: object, event_name: str, script_
     return "linux-agent-island" in command or f".claude/{script_name}" in command
 
 
+def _looks_like_managed_module_command(command: object, provider: str, event_name: str) -> bool:
+    if not isinstance(command, str):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    for index, token in enumerate(tokens[:-3]):
+        if token != "-m":
+            continue
+        if tokens[index + 1] != "linux_agent_island.hooks":
+            continue
+        return tokens[index + 2 :] == [provider, event_name]
+    return False
+
+
 class ClaudeProvider:
     def __init__(
         self,
@@ -39,11 +57,13 @@ class ClaudeProvider:
         hook_command_prefix: str,
         socket_path: Path,
         legacy_hook_script_paths: tuple[Path, ...] = (),
+        projects_dir: Path | None = None,
     ) -> None:
         self.settings_path = settings_path
         self.hook_command_prefix = hook_command_prefix
         self.socket_path = socket_path
         self.legacy_hook_script_paths = legacy_hook_script_paths
+        self.projects_dir = projects_dir or Path.home() / ".claude" / "projects"
 
     def install_hooks(self) -> None:
         payload = self._load_settings()
@@ -125,6 +145,11 @@ class ClaudeProvider:
                     isinstance(hook, dict)
                     and (
                         hook.get("command") in commands
+                        or _looks_like_managed_module_command(
+                            hook.get("command"),
+                            "claude",
+                            event_name,
+                        )
                         or _looks_like_managed_legacy_command(
                             hook.get("command"),
                             event_name,
@@ -138,6 +163,54 @@ class ClaudeProvider:
                 updated_entry["hooks"] = filtered_hooks
                 pruned_entries.append(updated_entry)
         return pruned_entries
+
+    def load_transcript(self, session_id: str, cwd: str = "") -> list[dict[str, str]]:
+        transcript_path = self._transcript_path(session_id, cwd)
+        if transcript_path is None or not transcript_path.exists():
+            return []
+
+        turns: list[dict[str, str]] = []
+        with transcript_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                turn = self._transcript_turn_from_event(payload)
+                if turn is not None:
+                    turns.append(turn)
+        return turns
+
+    def _transcript_path(self, session_id: str, cwd: str) -> Path | None:
+        if not session_id:
+            return None
+        if cwd:
+            direct = self.projects_dir / _claude_project_dir_name(cwd) / f"{session_id}.jsonl"
+            if direct.exists():
+                return direct
+        matches = list(self.projects_dir.glob(f"*/{session_id}.jsonl"))
+        return matches[0] if matches else None
+
+    def _transcript_turn_from_event(self, payload: dict[str, Any]) -> dict[str, str] | None:
+        kind = str(payload.get("type", ""))
+        if kind not in {"user", "assistant"}:
+            return None
+        message = payload.get("message")
+        role = kind
+        content: object = payload.get("text", "")
+        if isinstance(message, dict):
+            role = str(message.get("role", role))
+            content = message.get("content", content)
+        if role not in {"user", "assistant"}:
+            return None
+        text = _content_to_text(content)
+        if not text:
+            return None
+        return {
+            "role": role,
+            "text": text,
+            "timestamp": str(payload.get("timestamp", "")),
+        }
 
     def session_from_event(self, payload: dict[str, object]) -> AgentSession:
         cwd = str(payload.get("cwd", ""))
@@ -166,3 +239,33 @@ class ClaudeProvider:
             "ended": SessionPhase.COMPLETED,
         }
         return mapping.get(status, SessionPhase.IDLE)
+
+
+def _claude_project_dir_name(cwd: str) -> str:
+    stripped = cwd.strip()
+    if not stripped or stripped == "/":
+        return "-"
+    return stripped.replace("/", "-")
+
+
+def _content_to_text(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            value = item.get("text")
+            if value is None:
+                value = item.get("content")
+            text = str(value) if value is not None else ""
+        else:
+            text = ""
+        text = text.strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()

@@ -4,7 +4,7 @@ import json
 import os
 import shlex
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -78,6 +78,8 @@ class AppConfig:
     codex_hook_script_path: Path
     codex_hook_script_source_path: Path
     event_socket_path: Path
+    gemini_settings_path: Path = field(default_factory=lambda: Path.home() / ".gemini" / "settings.json")
+    gemini_tmp_dir: Path = field(default_factory=lambda: Path.home() / ".gemini" / "tmp")
     hook_command_prefix: str = ""
     dbus_name: str = "com.lzn.LinuxAgentIsland"
     dbus_path: str = "/com/lzn/LinuxAgentIsland"
@@ -105,5 +107,7 @@ class AppConfig:
             codex_hook_script_path=Path.home() / ".codex" / "hook" / "codex-hook.py",
             codex_hook_script_source_path=project_root / "bin" / "codex-hook.py",
             event_socket_path=runtime_dir / "events.sock",
+            gemini_settings_path=Path.home() / ".gemini" / "settings.json",
+            gemini_tmp_dir=Path.home() / ".gemini" / "tmp",
             hook_command_prefix=hook_command_prefix,
         )

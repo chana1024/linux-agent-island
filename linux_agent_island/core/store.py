@@ -203,9 +203,13 @@ class SessionStore:
             approval_mode=event.approval_mode if event.approval_mode is not None else base.approval_mode,
             updated_at=event.updated_at,
             started_at=(
-                event.updated_at
-                if event.type is AgentEventType.SESSION_STARTED
-                else (base.started_at or event.started_at or event.updated_at)
+                event.started_at
+                if event.started_at is not None
+                else (
+                    event.updated_at
+                    if event.type is AgentEventType.SESSION_STARTED
+                    else (base.started_at or event.updated_at)
+                )
             ),
             completed_at=(
                 event.updated_at

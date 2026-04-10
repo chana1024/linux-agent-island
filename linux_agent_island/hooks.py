@@ -76,6 +76,7 @@ def _get_process_metadata() -> tuple[int, str | None]:
 
 def _build_codex_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
     parent_pid, tty = _get_process_metadata()
+    now_ts = int(time.time())
     event_type = "activity_updated"
     phase = "running"
     title = ""
@@ -95,7 +96,8 @@ def _build_codex_event(hook_name: str, payload: dict[str, object]) -> dict[str, 
         "title": title,
         "phase": phase,
         "model": payload.get("model"),
-        "updated_at": int(time.time()),
+        "updated_at": now_ts,
+        "started_at": now_ts if hook_name == "UserPromptSubmit" else None,
         "origin": "live",
         "is_hook_managed": True,
         "pid": parent_pid,
@@ -115,7 +117,74 @@ def _is_codex_subagent_session(state_db_path: Path, session_id: str) -> bool:
     return provider.is_subagent_session(session_id)
 
 
+
+def _extract_gemini_model(payload: dict[str, object]) -> str | None:
+    llm_request = payload.get("llm_request")
+    if isinstance(llm_request, dict) and llm_request.get("model") is not None:
+        return str(llm_request["model"])
+    return str(payload["model"]) if payload.get("model") is not None else None
+
+
+def _build_gemini_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
+    parent_pid, tty = _get_process_metadata()
+    now_ts = int(time.time())
+    event_type = "activity_updated"
+    phase = "waiting"
+    title = ""
+    summary = ""
+    last_message_preview = ""
+    is_session_end = False
+
+    if hook_name == "SessionStart":
+        event_type = "session_started"
+        title = _fallback_session_title(payload)
+    elif hook_name == "BeforeAgent":
+        phase = "running"
+        title = _extract_prompt_title(payload)
+        started_at = now_ts
+    elif hook_name == "AfterAgent":
+        event_type = "session_completed"
+        phase = "completed"
+        summary = str(payload.get("prompt_response", ""))
+        last_message_preview = summary
+        started_at = None
+    elif hook_name == "SessionEnd":
+        event_type = "session_completed"
+        phase = "completed"
+        is_session_end = True
+        started_at = None
+    elif hook_name == "Notification":
+        phase = "waiting_approval" if payload.get("notification_type") == "ToolPermission" else "waiting"
+        summary = str(payload.get("message", ""))
+        last_message_preview = summary
+        started_at = None
+    else:
+        started_at = None
+
+    if hook_name not in {"BeforeAgent", "AfterAgent", "SessionEnd", "Notification"}:
+        started_at = None
+
+    return {
+        "event_type": event_type,
+        "provider": "gemini",
+        "session_id": payload.get("session_id", "unknown"),
+        "cwd": payload.get("cwd", ""),
+        "title": title,
+        "phase": phase,
+        "model": _extract_gemini_model(payload),
+        "updated_at": now_ts,
+        "started_at": started_at,
+        "origin": "live",
+        "is_hook_managed": True,
+        "pid": parent_pid,
+        "tty": tty,
+        "is_session_end": is_session_end,
+        "summary": summary,
+        "last_message_preview": last_message_preview,
+    }
+
 def _build_claude_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
+    now_ts = int(time.time())
     status = payload.get("status")
     if not status:
         mapping = {
@@ -157,7 +226,8 @@ def _build_claude_event(hook_name: str, payload: dict[str, object]) -> dict[str,
         "title": title,
         "phase": phase_map.get(str(status), "idle"),
         "model": payload.get("model"),
-        "updated_at": int(time.time()),
+        "updated_at": now_ts,
+        "started_at": now_ts if hook_name == "UserPromptSubmit" else None,
         "origin": "live",
         "is_hook_managed": True,
         "pid": payload.get("pid"),
@@ -188,6 +258,10 @@ def main() -> int:
     elif provider == "claude":
         event = _build_claude_event(hook_name, payload)
         emit_runtime_event(config.event_socket_path, event)
+    elif provider == "gemini":
+        event = _build_gemini_event(hook_name, payload)
+        emit_runtime_event(config.event_socket_path, event)
+        print(json.dumps({"suppressOutput": True}))
     else:
         return 1
     return 0

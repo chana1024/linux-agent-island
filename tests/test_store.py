@@ -215,3 +215,39 @@ def test_store_adopts_alive_set_and_resets_process_counter() -> None:
     assert session is not None
     assert session.is_process_alive is True
     assert session.process_not_seen_count == 0
+
+
+def test_store_resets_started_at_from_user_prompt_activity() -> None:
+    store = SessionStore()
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_STARTED,
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.RUNNING,
+            updated_at=100,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.ACTIVITY_UPDATED,
+            provider="codex",
+            session_id="thread-1",
+            title="latest prompt",
+            phase=SessionPhase.RUNNING,
+            updated_at=250,
+            started_at=250,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+
+    session = store.get("codex", "thread-1")
+
+    assert session is not None
+    assert session.started_at == 250
+    assert session.title == "latest prompt"

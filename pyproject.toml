@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "linux-agent-island"
 version = "0.1.0"
-description = "Linux floating island for Claude Code and Codex CLI sessions"
+description = "Linux floating island for Claude Code, Codex CLI, and Gemini CLI sessions"
 requires-python = ">=3.10"
 
 [project.scripts]

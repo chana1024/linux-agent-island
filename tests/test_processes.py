@@ -615,3 +615,34 @@ def test_jump_to_session_logs_failed_window_activation(monkeypatch, caplog) -> N
         assert inspector.jump_to_session(session) is False
 
     assert "failed to activate window" in caplog.text
+
+
+def test_list_agent_processes_detects_node_backed_gemini(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    tree = {
+        100: ProcessInfo(
+            pid=100,
+            ppid=1,
+            command="node",
+            tty="pts/7",
+            args="/home/lzn/.nvm/versions/node/v24.13.0/bin/node --no-warnings=DEP0040 /home/lzn/.nvm/versions/node/v24.13.0/lib/node_modules/@google/gemini-cli/dist/index.js",
+        ),
+        101: ProcessInfo(pid=101, ppid=1, command="node", tty="pts/8", args="node server.js"),
+    }
+    monkeypatch.setattr(inspector, "process_cwd", lambda _pid, **_kwargs: "/tmp/demo")
+
+    processes = inspector.list_agent_processes(tree)
+
+    assert processes == [AgentProcessInfo(provider="gemini", pid=100, tty="pts/7", cwd="/tmp/demo")]
+
+
+def test_list_agent_processes_detects_gemini_command(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    tree = {
+        100: ProcessInfo(pid=100, ppid=1, command="gemini", tty="pts/7", args="gemini"),
+    }
+    monkeypatch.setattr(inspector, "process_cwd", lambda _pid, **_kwargs: "/tmp/demo")
+
+    processes = inspector.list_agent_processes(tree)
+
+    assert processes == [AgentProcessInfo(provider="gemini", pid=100, tty="pts/7", cwd="/tmp/demo")]

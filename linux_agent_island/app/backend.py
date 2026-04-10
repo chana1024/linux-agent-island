@@ -15,7 +15,7 @@ from gi.repository import Gio, GLib
 from ..core.config import AppConfig
 from ..core.logging import configure_logging
 from ..core.store import SessionStore
-from ..providers import ClaudeProvider, CodexProvider
+from ..providers import ClaudeProvider, CodexProvider, GeminiProvider
 from ..runtime.agent_events import AgentEvent
 from ..runtime.events import EventSocketServer
 from ..runtime.processes import SessionProcessInspector
@@ -27,6 +27,11 @@ INTROSPECTION_XML = """
   <interface name="com.lzn.LinuxAgentIsland">
     <method name="ListSessions">
       <arg name="sessions" direction="out" type="s"/>
+    </method>
+    <method name="GetSessionTranscript">
+      <arg name="provider" direction="in" type="s"/>
+      <arg name="session_id" direction="in" type="s"/>
+      <arg name="turns" direction="out" type="s"/>
     </method>
     <method name="JumpToSession">
       <arg name="provider" direction="in" type="s"/>
@@ -66,6 +71,11 @@ class BackendService:
             hook_script_path=self.config.codex_hook_script_path,
             hook_script_source_path=self.config.codex_hook_script_source_path,
             managed_hook_script_paths=(self.config.codex_hook_script_source_path,),
+        )
+        self.gemini = GeminiProvider(
+            settings_path=self.config.gemini_settings_path,
+            tmp_dir=self.config.gemini_tmp_dir,
+            hook_command_prefix=self.config.hook_command_prefix,
         )
         self.session_cache = SessionCache(self.config.session_cache_path)
         self.process_inspector = SessionProcessInspector()
@@ -111,6 +121,7 @@ class BackendService:
     def _install_hooks(self) -> None:
         self.claude.install_hooks()
         self.codex.install_hooks()
+        self.gemini.install_hooks()
 
     def _reload_provider_state(self) -> None:
         cached_sessions = self.session_cache.load()
@@ -157,6 +168,10 @@ class BackendService:
     ) -> None:
         if method_name == "ListSessions":
             invocation.return_value(GLib.Variant("(s)", (self._serialize_sessions(),)))
+            return
+        if method_name == "GetSessionTranscript":
+            provider, session_id = parameters.unpack()
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_session_transcript(provider, session_id),)))
             return
         if method_name == "JumpToSession":
             provider, session_id = parameters.unpack()
@@ -207,6 +222,16 @@ class BackendService:
         sessions = self.store.list_sessions(visible_only=True)
         sessions = self.process_inspector.annotate_sessions(sessions)
         return json.dumps([session.to_dict() for session in sessions])
+
+    def _serialize_session_transcript(self, provider: str, session_id: str) -> str:
+        session = self.store.get(provider, session_id)
+        if provider == "codex":
+            return json.dumps(self.codex.load_transcript(session_id))
+        if provider == "claude":
+            return json.dumps(self.claude.load_transcript(session_id, session.cwd if session else ""))
+        if provider == "gemini":
+            return json.dumps(self.gemini.load_transcript(session_id))
+        return "[]"
 
     def _reconcile_sessions(self) -> bool:
         sessions = self.store.list_sessions()
