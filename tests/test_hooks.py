@@ -102,6 +102,7 @@ def test_codex_main_skips_subagent_sessions(monkeypatch, tmp_path: Path, capsys)
                 codex_hooks_path=tmp_path / "hooks.json",
                 claude_hook_script_path=tmp_path / "claude-hook.py",
                 codex_hook_script_path=tmp_path / "codex-hook.py",
+                codex_hook_script_source_path=tmp_path / "source-codex-hook.py",
                 event_socket_path=tmp_path / "events.sock",
             )
         ),

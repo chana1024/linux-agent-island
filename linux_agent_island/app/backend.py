@@ -24,7 +24,7 @@ from ..runtime.session_cache import SessionCache
 
 INTROSPECTION_XML = """
 <node>
-  <interface name="com.openclaw.LinuxAgentIsland">
+  <interface name="com.lzn.LinuxAgentIsland">
     <method name="ListSessions">
       <arg name="sessions" direction="out" type="s"/>
     </method>
@@ -54,14 +54,18 @@ class BackendService:
         self.store = SessionStore()
         self.claude = ClaudeProvider(
             settings_path=self.config.claude_settings_path,
-            hook_script_path=self.config.claude_hook_script_path,
+            hook_command_prefix=self.config.hook_command_prefix,
             socket_path=self.config.event_socket_path,
+            legacy_hook_script_paths=(self.config.claude_hook_script_path,),
         )
         self.codex = CodexProvider(
             state_db_path=self.config.codex_state_db_path,
             history_path=self.config.codex_history_path,
             hooks_config_path=self.config.codex_hooks_path,
+            hook_command_prefix=self.config.hook_command_prefix,
             hook_script_path=self.config.codex_hook_script_path,
+            hook_script_source_path=self.config.codex_hook_script_source_path,
+            managed_hook_script_paths=(self.config.codex_hook_script_source_path,),
         )
         self.session_cache = SessionCache(self.config.session_cache_path)
         self.process_inspector = SessionProcessInspector()
@@ -195,7 +199,7 @@ class BackendService:
             invocation.return_value(None)
             return
         invocation.return_dbus_error(
-            "com.openclaw.LinuxAgentIsland.Error",
+            "com.lzn.LinuxAgentIsland.Error",
             f"Unknown method: {method_name}",
         )
 

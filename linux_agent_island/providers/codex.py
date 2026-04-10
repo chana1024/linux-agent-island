@@ -30,13 +30,21 @@ class CodexProvider:
         state_db_path: Path,
         history_path: Path,
         hooks_config_path: Path,
-        hook_script_path: Path,
+        hook_command_prefix: str | None = None,
+        hook_script_path: Path | None = None,
+        hook_script_source_path: Path | None = None,
+        managed_hook_script_paths: tuple[Path, ...] = (),
         recent_window_seconds: int = 86_400,
     ) -> None:
         self.state_db_path = state_db_path
         self.history_path = history_path
         self.hooks_config_path = hooks_config_path
+        self.hook_command_prefix = hook_command_prefix
         self.hook_script_path = hook_script_path
+        self.hook_script_source_path = hook_script_source_path
+        self.managed_hook_script_paths = tuple(
+            path for path in (hook_script_path, *managed_hook_script_paths) if path is not None
+        )
         self.recent_window_seconds = recent_window_seconds
 
     def install_hooks(self) -> None:
@@ -67,8 +75,46 @@ class CodexProvider:
         self.hooks_config_path.parent.mkdir(parents=True, exist_ok=True)
         self.hooks_config_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
+    def uninstall_hooks(self) -> None:
+        if not self.hooks_config_path.exists():
+            return
+        try:
+            payload = json.loads(self.hooks_config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        hooks_obj = payload.get("hooks")
+        if not isinstance(hooks_obj, dict):
+            return
+        for event in (*self.REQUIRED_HOOK_EVENTS, *self.LEGACY_MANAGED_HOOK_EVENTS):
+            if event not in hooks_obj:
+                continue
+            pruned_entries = self._prune_managed_hook_entries(hooks_obj.get(event, []), event)
+            if pruned_entries:
+                hooks_obj[event] = pruned_entries
+            else:
+                del hooks_obj[event]
+        self.hooks_config_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _install_hook_script(self) -> None:
+        return
+
     def _managed_command(self, event_name: str) -> str:
+        if self.hook_command_prefix is not None:
+            return f"{self.hook_command_prefix} codex {event_name}"
+        if self.hook_script_path is None:
+            raise ValueError("hook_command_prefix or hook_script_path is required")
         return f"/usr/bin/python3 {self.hook_script_path} {event_name}"
+
+    def _managed_commands(self, event_name: str) -> set[str]:
+        commands = {
+            f"/usr/bin/python3 {hook_script_path} {event_name}"
+            for hook_script_path in self.managed_hook_script_paths
+        }
+        if self.hook_command_prefix is not None:
+            commands.add(self._managed_command(event_name))
+        return commands
 
     def _managed_hook(self, event_name: str) -> dict[str, object]:
         return {
@@ -79,7 +125,7 @@ class CodexProvider:
 
     def _merge_hook_entries(self, existing: object, event_name: str) -> list[object]:
         entries = list(existing) if isinstance(existing, list) else []
-        command = self._managed_command(event_name)
+        commands = self._managed_commands(event_name)
         merged_entries: list[object] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -94,7 +140,10 @@ class CodexProvider:
                 if not isinstance(hook, dict):
                     filtered_hooks.append(hook)
                     continue
-                if hook.get("command") == command:
+                if hook.get("command") in commands or self._looks_like_managed_legacy_command(
+                    hook.get("command"),
+                    event_name,
+                ):
                     continue
                 filtered_hooks.append(hook)
             if filtered_hooks:
@@ -106,7 +155,7 @@ class CodexProvider:
 
     def _prune_managed_hook_entries(self, existing: object, event_name: str) -> list[object]:
         entries = list(existing) if isinstance(existing, list) else []
-        command = self._managed_command(event_name)
+        commands = self._managed_commands(event_name)
         pruned_entries: list[object] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -119,13 +168,26 @@ class CodexProvider:
             filtered_hooks = [
                 hook
                 for hook in hooks
-                if not (isinstance(hook, dict) and hook.get("command") == command)
+                if not (
+                    isinstance(hook, dict)
+                    and (
+                        hook.get("command") in commands
+                        or self._looks_like_managed_legacy_command(hook.get("command"), event_name)
+                    )
+                )
             ]
             if filtered_hooks:
                 updated_entry = dict(entry)
                 updated_entry["hooks"] = filtered_hooks
                 pruned_entries.append(updated_entry)
         return pruned_entries
+
+    def _looks_like_managed_legacy_command(self, command: object, event_name: str) -> bool:
+        if not isinstance(command, str):
+            return False
+        if not command.endswith(f"codex-hook.py {event_name}"):
+            return False
+        return "linux-agent-island" in command or ".codex/hook/codex-hook.py" in command
 
     def load_sessions(self, now: int | None = None) -> list[AgentSession]:
         now_ts = now if now is not None else int(time.time())

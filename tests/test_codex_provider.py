@@ -323,6 +323,75 @@ def test_codex_provider_merges_required_hooks(tmp_path: Path) -> None:
     assert "PostToolUse" not in payload["hooks"]
 
 
+def test_codex_provider_installs_module_hook_command_without_script_copy(tmp_path: Path) -> None:
+    provider = CodexProvider(
+        state_db_path=tmp_path / "state.sqlite",
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=tmp_path / ".codex" / "hooks.json",
+        hook_command_prefix="/opt/linux-agent-island/venv/bin/python -m linux_agent_island.hooks",
+    )
+
+    provider.install_hooks()
+    payload = json.loads((tmp_path / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+
+    assert payload["hooks"]["SessionStart"] == [
+        {
+            "hooks": [
+                _managed_hook(
+                    "/opt/linux-agent-island/venv/bin/python -m linux_agent_island.hooks codex SessionStart"
+                )
+            ]
+        }
+    ]
+
+
+def test_codex_provider_replaces_old_project_path_with_installed_hook_path(tmp_path: Path) -> None:
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    source_path = tmp_path / "project" / "bin" / "codex-hook.py"
+    installed_path = tmp_path / ".codex" / "hook" / "codex-hook.py"
+    source_path.parent.mkdir(parents=True)
+    hooks_path.parent.mkdir(parents=True)
+    source_path.write_text("#!/usr/bin/env python3\nprint('hook')\n", encoding="utf-8")
+    old_start = f"/usr/bin/python3 {source_path} SessionStart"
+    old_pre = f"/usr/bin/python3 {source_path} PreToolUse"
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [{"hooks": [{"type": "command", "command": old_start, "timeout": 10}]}],
+                    "PreToolUse": [{"hooks": [{"type": "command", "command": old_pre, "timeout": 10}]}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider = CodexProvider(
+        state_db_path=tmp_path / "state.sqlite",
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=hooks_path,
+        hook_command_prefix="/opt/linux-agent-island/venv/bin/python -m linux_agent_island.hooks",
+        hook_script_path=installed_path,
+        hook_script_source_path=source_path,
+        managed_hook_script_paths=(source_path,),
+    )
+
+    provider.install_hooks()
+    payload = json.loads(hooks_path.read_text(encoding="utf-8"))
+    start_commands = [
+        hook["command"]
+        for entry in payload["hooks"]["SessionStart"]
+        for hook in entry["hooks"]
+    ]
+
+    assert old_start not in start_commands
+    assert (
+        "/opt/linux-agent-island/venv/bin/python -m linux_agent_island.hooks codex SessionStart"
+        in start_commands
+    )
+    assert "PreToolUse" not in payload["hooks"]
+
+
 def test_codex_provider_deduplicates_existing_managed_required_hooks(tmp_path: Path) -> None:
     hooks_path = tmp_path / "hooks.json"
     hooks_path.write_text(
