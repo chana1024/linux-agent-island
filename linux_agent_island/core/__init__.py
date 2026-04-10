@@ -1,4 +1,4 @@
-from .config import AppConfig, FrontendSettings, load_frontend_settings
+from .config import AppConfig, FrontendSettings, load_frontend_settings, save_frontend_settings
 from .models import AgentSession, SessionOrigin, SessionPhase
 
 __all__ = [
@@ -8,4 +8,5 @@ __all__ = [
     "SessionOrigin",
     "SessionPhase",
     "load_frontend_settings",
+    "save_frontend_settings",
 ]
