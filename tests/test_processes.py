@@ -1,5 +1,5 @@
-from linux_agent_shell.models import AgentSession, SessionOrigin, SessionPhase
-from linux_agent_shell.runtime.processes import (
+from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
+from linux_agent_island.runtime.processes import (
     AgentProcessInfo,
     ProcessInfo,
     SessionProcessInspector,
@@ -196,7 +196,7 @@ def test_build_process_tree_does_not_log_commands_by_default(monkeypatch, caplog
 
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     with caplog.at_level("DEBUG"):
         tree = inspector.build_process_tree()
@@ -214,7 +214,7 @@ def test_activate_window_logs_commands_when_enabled(monkeypatch, caplog) -> None
 
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     with caplog.at_level("DEBUG"):
         activated = inspector.activate_window("0x03e00007", log_commands=True)
@@ -244,7 +244,7 @@ def test_activate_window_for_guake_shows_window_before_activation(monkeypatch) -
 
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     activated = inspector.activate_window_for_pid(window, window.pid, tree, log_commands=True)
 
@@ -310,7 +310,7 @@ def test_jump_to_session_reveals_hidden_guake_tmux_window(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     assert inspector.jump_to_session(session) is True
     assert ["guake", "--show"] in calls
@@ -368,7 +368,7 @@ def test_jump_to_session_uses_external_tmux_client_when_target_session_has_no_cl
 
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     assert inspector.jump_to_session(session) is True
     assert ["tmux", "switch-client", "-c", "/dev/pts/5", "-t", "$2"] in calls
@@ -466,7 +466,7 @@ def test_jump_to_session_activates_matching_terminal_window(monkeypatch) -> None
             returncode = 0
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     assert inspector.jump_to_session(session) is True
     assert calls == [["wmctrl", "-i", "-a", "0x03e00007"]]
@@ -520,7 +520,7 @@ def test_jump_to_session_selects_tmux_pane_and_activates_client_window(monkeypat
             returncode = 0
         return Result()
 
-    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.subprocess.run", fake_run)
 
     assert inspector.jump_to_session(session) is True
     assert calls == [

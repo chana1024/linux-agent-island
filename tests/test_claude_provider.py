@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from linux_agent_shell.models import SessionPhase
-from linux_agent_shell.providers.claude import ClaudeProvider
+from linux_agent_island.core.models import SessionPhase
+from linux_agent_island.providers.claude import ClaudeProvider
 
 
 def test_claude_provider_merges_hooks_into_settings(tmp_path: Path) -> None:
@@ -29,7 +29,7 @@ def test_claude_provider_merges_hooks_into_settings(tmp_path: Path) -> None:
 
     provider = ClaudeProvider(
         settings_path=settings_path,
-        hook_script_path=Path("/opt/linux-agent-shell/claude-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/claude-hook.py"),
         socket_path=tmp_path / "events.sock",
     )
 

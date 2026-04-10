@@ -2,11 +2,11 @@
 
 ## Goal
 
-When a visible session transitions from `running` to `completed`, automatically reveal it in the expanded Linux Agent Shell island, scroll it into view, and highlight it for up to five minutes unless the user clicks that session first.
+When a visible session transitions from `running` to `completed`, automatically reveal it in the expanded Linux Agent Island island, scroll it into view, and highlight it for up to five minutes unless the user clicks that session first.
 
 ## Chosen Approach
 
-Implement the behavior entirely in `linux_agent_shell/frontend.py`. The GTK frontend already receives the full session list through `ListSessions` and `SessionsChanged`, so it can compare the previous and current phases locally without changing the backend or D-Bus payloads.
+Implement the behavior entirely in `linux_agent_island/app/frontend.py`. The GTK frontend already receives the full session list through `ListSessions` and `SessionsChanged`, so it can compare the previous and current phases locally without changing the backend or D-Bus payloads.
 
 The frontend will keep three pieces of transient UI state: the last known phase per session, highlight expiration timestamps per session, and the latest completed session that still needs to be scrolled into view. When a `running -> completed` transition is detected, the frontend will expand the island if needed, scroll to the newest completed session, and apply a temporary highlight style to every newly completed session.
 

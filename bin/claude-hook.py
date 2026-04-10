@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from linux_agent_shell.hooks import main
+from linux_agent_island.hooks import main
 
 
 if __name__ == "__main__":

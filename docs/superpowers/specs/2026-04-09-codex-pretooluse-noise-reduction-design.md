@@ -2,7 +2,7 @@
 
 ## Context
 
-The current Linux Agent Shell backend installs Codex hooks for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
+The current Linux Agent Island backend installs Codex hooks for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
 
 For Codex sessions, `PreToolUse` and `PostToolUse` are both translated into generic `activity_updated` events with `phase="running"`. Those events do not currently capture tool identity or tool-specific UI state. They still trigger the full runtime update path:
 
@@ -97,7 +97,7 @@ Codex session flow becomes:
 
 1. `SessionStart` creates the live session.
 2. `UserPromptSubmit` marks the session active and updates recency.
-3. Internal tool execution happens without extra Linux Agent Shell hook traffic.
+3. Internal tool execution happens without extra Linux Agent Island hook traffic.
 4. `Stop` marks the turn completed.
 5. Process reconciliation continues to determine eventual disappearance from the island.
 
@@ -107,7 +107,7 @@ This means a session can still move from `completed` back to `running` on the ne
 
 Code changes should be limited to:
 
-- Codex hook installation in `linux_agent_shell/providers/codex.py`
+- Codex hook installation in `linux_agent_island/providers/codex.py`
 - tests that currently assert `PreToolUse` and `PostToolUse` hook registration
 
 No runtime event schema changes are required.

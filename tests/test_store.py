@@ -1,6 +1,6 @@
-from linux_agent_shell.models import AgentSession, SessionOrigin, SessionPhase
-from linux_agent_shell.runtime.agent_events import AgentEvent, AgentEventType
-from linux_agent_shell.store import SessionStore
+from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
+from linux_agent_island.runtime.agent_events import AgentEvent, AgentEventType
+from linux_agent_island.core.store import SessionStore
 
 
 def test_store_upserts_and_archives_sessions() -> None:

@@ -14,7 +14,7 @@
 
 **Files:**
 - Create: `tests/test_config.py`
-- Modify: `linux_agent_shell/config.py`
+- Modify: `linux_agent_island/core/config.py`
 - Test: `tests/test_config.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -50,14 +50,14 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_config.py linux_agent_shell/config.py
+git add tests/test_config.py linux_agent_island/core/config.py
 git commit -m "feat: add frontend settings loader"
 ```
 
 ### Task 2: Apply the gap and above state
 
 **Files:**
-- Modify: `linux_agent_shell/frontend.py`
+- Modify: `linux_agent_island/app/frontend.py`
 - Modify: `tests/test_frontend_helpers.py`
 - Modify: `README.md`
 
@@ -94,6 +94,6 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_frontend_helpers.py linux_agent_shell/frontend.py README.md
+git add tests/test_frontend_helpers.py linux_agent_island/app/frontend.py README.md
 git commit -m "fix: add top bar gap and above hint"
 ```

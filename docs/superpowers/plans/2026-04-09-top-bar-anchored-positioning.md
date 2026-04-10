@@ -13,8 +13,8 @@
 ### Task 1: Add the failing coordinate tests
 
 **Files:**
-- Modify: `linux_agent_shell/tests/test_frontend_helpers.py`
-- Test: `linux_agent_shell/tests/test_frontend_helpers.py`
+- Modify: `linux_agent_island/tests/test_frontend_helpers.py`
+- Test: `linux_agent_island/tests/test_frontend_helpers.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -52,14 +52,14 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_frontend_helpers.py linux_agent_shell/frontend.py
+git add tests/test_frontend_helpers.py linux_agent_island/app/frontend.py
 git commit -m "fix: anchor island below top bar"
 ```
 
 ### Task 2: Use X11 positioning with fallback
 
 **Files:**
-- Modify: `linux_agent_shell/frontend.py`
+- Modify: `linux_agent_island/app/frontend.py`
 - Test: `tests/test_frontend_helpers.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -96,6 +96,6 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_frontend_helpers.py linux_agent_shell/frontend.py
+git add tests/test_frontend_helpers.py linux_agent_island/app/frontend.py
 git commit -m "fix: use stable x11 island positioning"
 ```

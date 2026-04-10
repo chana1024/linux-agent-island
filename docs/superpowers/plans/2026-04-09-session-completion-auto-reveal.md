@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Auto-expand, scroll to, and temporarily highlight sessions that transition from running to completed in the Linux Agent Shell island.
+**Goal:** Auto-expand, scroll to, and temporarily highlight sessions that transition from running to completed in the Linux Agent Island island.
 
 **Architecture:** Keep all behavior in the GTK frontend. Add pure helper functions for completion detection and highlight expiry, then connect those helpers to the existing `ListSessions` and `SessionsChanged` update flow. Use a frontend-only timeout map plus a pending scroll target so the UI can reveal the latest completed session without backend changes.
 
@@ -13,8 +13,8 @@
 ### Task 1: Add failing helper tests
 
 **Files:**
-- Modify: `linux-agent-shell/tests/test_frontend_helpers.py`
-- Modify: `linux-agent-shell/linux_agent_shell/frontend.py`
+- Modify: `linux-agent-island/tests/test_frontend_helpers.py`
+- Modify: `linux-agent-island/linux_agent_island/app/frontend.py`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -44,7 +44,7 @@ def test_detect_completed_sessions_tracks_running_to_completed_transitions() -> 
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `/usr/bin/python3 -m pytest linux-agent-shell/tests/test_frontend_helpers.py -q`
+Run: `/usr/bin/python3 -m pytest linux-agent-island/tests/test_frontend_helpers.py -q`
 Expected: FAIL because the completion helper does not exist yet.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -64,21 +64,21 @@ def detect_completed_sessions(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `/usr/bin/python3 -m pytest linux-agent-shell/tests/test_frontend_helpers.py -q`
+Run: `/usr/bin/python3 -m pytest linux-agent-island/tests/test_frontend_helpers.py -q`
 Expected: PASS for the new helper tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add linux-agent-shell/tests/test_frontend_helpers.py linux-agent-shell/linux_agent_shell/frontend.py
+git add linux-agent-island/tests/test_frontend_helpers.py linux-agent-island/linux_agent_island/app/frontend.py
 git commit -m "test: cover session completion reveal helpers"
 ```
 
 ### Task 2: Wire auto-reveal into the frontend
 
 **Files:**
-- Modify: `linux-agent-shell/linux_agent_shell/frontend.py`
-- Modify: `linux-agent-shell/tests/test_frontend_helpers.py`
+- Modify: `linux-agent-island/linux_agent_island/app/frontend.py`
+- Modify: `linux-agent-island/tests/test_frontend_helpers.py`
 
 - [ ] **Step 1: Add the next failing tests**
 
@@ -97,7 +97,7 @@ def test_refresh_completion_highlights_uses_latest_completed_session_as_target()
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `/usr/bin/python3 -m pytest linux-agent-shell/tests/test_frontend_helpers.py -q`
+Run: `/usr/bin/python3 -m pytest linux-agent-island/tests/test_frontend_helpers.py -q`
 Expected: FAIL because highlight refresh logic does not exist yet.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -116,20 +116,20 @@ def refresh_completion_highlights(...):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `/usr/bin/python3 -m pytest linux-agent-shell/tests/test_frontend_helpers.py -q`
+Run: `/usr/bin/python3 -m pytest linux-agent-island/tests/test_frontend_helpers.py -q`
 Expected: PASS for the helper tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add linux-agent-shell/tests/test_frontend_helpers.py linux-agent-shell/linux_agent_shell/frontend.py
+git add linux-agent-island/tests/test_frontend_helpers.py linux-agent-island/linux_agent_island/app/frontend.py
 git commit -m "feat: auto reveal completed sessions in frontend"
 ```
 
 ### Task 3: Connect GTK rendering, click clearing, and timeout cleanup
 
 **Files:**
-- Modify: `linux-agent-shell/linux_agent_shell/frontend.py`
+- Modify: `linux-agent-island/linux_agent_island/app/frontend.py`
 
 - [ ] **Step 1: Add the UI wiring**
 
@@ -156,17 +156,17 @@ if session_key(session) == self.pending_scroll_session:
 
 - [ ] **Step 3: Run focused tests**
 
-Run: `/usr/bin/python3 -m pytest linux-agent-shell/tests/test_frontend_helpers.py -q`
+Run: `/usr/bin/python3 -m pytest linux-agent-island/tests/test_frontend_helpers.py -q`
 Expected: PASS
 
-- [ ] **Step 4: Run the full linux-agent-shell test suite**
+- [ ] **Step 4: Run the full linux-agent-island test suite**
 
-Run: `/usr/bin/python3 -m pytest linux-agent-shell/tests -q`
+Run: `/usr/bin/python3 -m pytest linux-agent-island/tests -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add linux-agent-shell/linux_agent_shell/frontend.py linux-agent-shell/tests/test_frontend_helpers.py
+git add linux-agent-island/linux_agent_island/app/frontend.py linux-agent-island/tests/test_frontend_helpers.py
 git commit -m "feat: highlight completed sessions in island"
 ```

@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from linux_agent_shell import hooks
+from linux_agent_island import hooks
 
 
 def test_codex_hook_event_captures_pid_and_tty(monkeypatch) -> None:

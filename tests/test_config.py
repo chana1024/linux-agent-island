@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from linux_agent_shell.config import FrontendSettings, load_frontend_settings
+from linux_agent_island.core.config import FrontendSettings, load_frontend_settings
 
 
 def test_load_frontend_settings_reads_top_bar_gap(tmp_path: Path) -> None:

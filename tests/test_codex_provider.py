@@ -2,8 +2,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from linux_agent_shell.models import SessionOrigin, SessionPhase
-from linux_agent_shell.providers.codex import CodexProvider
+from linux_agent_island.core.models import SessionOrigin, SessionPhase
+from linux_agent_island.providers.codex import CodexProvider
 
 
 def _write_thread_db(path: Path) -> None:
@@ -286,7 +286,7 @@ def test_codex_provider_merges_required_hooks(tmp_path: Path) -> None:
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -312,13 +312,13 @@ def test_codex_provider_merges_required_hooks(tmp_path: Path) -> None:
         for hook in entry["hooks"]
     ]
 
-    assert "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart" in session_start_commands
+    assert "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart" in session_start_commands
     assert (
-        "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py UserPromptSubmit"
+        "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py UserPromptSubmit"
         in user_prompt_submit_commands
     )
     assert "/existing/stop.sh" in stop_commands
-    assert "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py Stop" in stop_commands
+    assert "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py Stop" in stop_commands
     assert "PreToolUse" not in payload["hooks"]
     assert "PostToolUse" not in payload["hooks"]
 
@@ -334,12 +334,12 @@ def test_codex_provider_deduplicates_existing_managed_required_hooks(tmp_path: P
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart",
                                     "timeout": 10,
                                 },
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart",
                                     "timeout": 10,
                                 },
                                 {
@@ -355,12 +355,12 @@ def test_codex_provider_deduplicates_existing_managed_required_hooks(tmp_path: P
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py Stop",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py Stop",
                                     "timeout": 10,
                                 },
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py Stop",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py Stop",
                                     "timeout": 10,
                                 },
                             ]
@@ -376,7 +376,7 @@ def test_codex_provider_deduplicates_existing_managed_required_hooks(tmp_path: P
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -393,9 +393,9 @@ def test_codex_provider_deduplicates_existing_managed_required_hooks(tmp_path: P
         for hook in entry["hooks"]
     ]
 
-    assert session_start_commands.count("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart") == 1
+    assert session_start_commands.count("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart") == 1
     assert "/custom/start.sh" in session_start_commands
-    assert stop_commands.count("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py Stop") == 1
+    assert stop_commands.count("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py Stop") == 1
 
 
 def test_codex_provider_moves_scoped_managed_required_hook_to_canonical_entry(tmp_path: Path) -> None:
@@ -410,7 +410,7 @@ def test_codex_provider_moves_scoped_managed_required_hook_to_canonical_entry(tm
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart",
                                     "timeout": 10,
                                 },
                                 {
@@ -431,7 +431,7 @@ def test_codex_provider_moves_scoped_managed_required_hook_to_canonical_entry(tm
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -450,7 +450,7 @@ def test_codex_provider_moves_scoped_managed_required_hook_to_canonical_entry(tm
         },
         {
             "hooks": [
-                _managed_hook("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart")
+                _managed_hook("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart")
             ]
         },
     ]
@@ -467,13 +467,13 @@ def test_codex_provider_canonicalizes_malformed_managed_required_hooks(tmp_path:
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py UserPromptSubmit",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py UserPromptSubmit",
                                     "timeout": 1,
                                     "unexpected": True,
                                 },
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py UserPromptSubmit",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py UserPromptSubmit",
                                     "timeout": 10,
                                 },
                                 {
@@ -494,7 +494,7 @@ def test_codex_provider_canonicalizes_malformed_managed_required_hooks(tmp_path:
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -508,7 +508,7 @@ def test_codex_provider_canonicalizes_malformed_managed_required_hooks(tmp_path:
         if isinstance(hook, dict)
     ]
     canonical_hook = _managed_hook(
-        "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py UserPromptSubmit"
+        "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py UserPromptSubmit"
     )
 
     assert user_prompt_submit_hooks.count(canonical_hook) == 1
@@ -524,7 +524,7 @@ def test_codex_provider_handles_non_dict_hooks_section_without_crashing(tmp_path
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -541,7 +541,7 @@ def test_codex_provider_recovers_from_invalid_json_hooks_file(tmp_path: Path) ->
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -549,13 +549,13 @@ def test_codex_provider_recovers_from_invalid_json_hooks_file(tmp_path: Path) ->
 
     assert set(payload["hooks"]) == {"SessionStart", "UserPromptSubmit", "Stop"}
     assert payload["hooks"]["SessionStart"] == [
-        {"hooks": [_managed_hook("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart")]}
+        {"hooks": [_managed_hook("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart")]}
     ]
     assert payload["hooks"]["UserPromptSubmit"] == [
-        {"hooks": [_managed_hook("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py UserPromptSubmit")]}
+        {"hooks": [_managed_hook("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py UserPromptSubmit")]}
     ]
     assert payload["hooks"]["Stop"] == [
-        {"hooks": [_managed_hook("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py Stop")]}
+        {"hooks": [_managed_hook("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py Stop")]}
     ]
 
 
@@ -597,7 +597,7 @@ def test_codex_provider_handles_malformed_event_entries_without_crashing(tmp_pat
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -616,11 +616,11 @@ def test_codex_provider_handles_malformed_event_entries_without_crashing(tmp_pat
         if isinstance(hook, dict)
     ]
 
-    assert session_start_commands.count("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py SessionStart") == 1
+    assert session_start_commands.count("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py SessionStart") == 1
     assert payload["hooks"]["UserPromptSubmit"][0] == "broken"
     assert payload["hooks"]["UserPromptSubmit"][1] == {"hooks": "broken"}
     assert "/custom/prompt.sh" in user_prompt_submit_commands
-    assert user_prompt_submit_commands.count("/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py UserPromptSubmit") == 1
+    assert user_prompt_submit_commands.count("/usr/bin/python3 /opt/linux-agent-island/codex-hook.py UserPromptSubmit") == 1
     assert payload["hooks"]["PreToolUse"] == ["broken-entry", {"hooks": "broken"}]
 
 
@@ -628,8 +628,8 @@ def test_codex_provider_removes_managed_pre_and_post_hooks_but_keeps_unrelated_h
     tmp_path: Path,
 ) -> None:
     hooks_path = tmp_path / "hooks.json"
-    managed_pre = "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py PreToolUse"
-    managed_post = "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py PostToolUse"
+    managed_pre = "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py PreToolUse"
+    managed_post = "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py PostToolUse"
     hooks_path.write_text(
         json.dumps(
             {
@@ -687,7 +687,7 @@ def test_codex_provider_removes_managed_pre_and_post_hooks_but_keeps_unrelated_h
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -729,7 +729,7 @@ def test_codex_provider_removes_empty_legacy_hook_sections_when_only_managed_hoo
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py PreToolUse",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py PreToolUse",
                                     "timeout": 10,
                                 }
                             ]
@@ -740,7 +740,7 @@ def test_codex_provider_removes_empty_legacy_hook_sections_when_only_managed_hoo
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py PostToolUse",
+                                    "command": "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py PostToolUse",
                                     "timeout": 10,
                                 }
                             ]
@@ -756,7 +756,7 @@ def test_codex_provider_removes_empty_legacy_hook_sections_when_only_managed_hoo
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()

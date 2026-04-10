@@ -2,13 +2,13 @@
 
 ## Goal
 
-Add a project-wide logging system with a configurable log level in `~/.config/linux-agent-shell/settings.json`, and use it to diagnose why clicking a session sometimes fails to open or focus the target terminal.
+Add a project-wide logging system with a configurable log level in `~/.config/linux-agent-island/settings.json`, and use it to diagnose why clicking a session sometimes fails to open or focus the target terminal.
 
 ## Chosen Approach
 
 Introduce a small shared logging bootstrap used by both frontend and backend, and extend the existing settings loader so one config file controls both UI settings and logging level. Logging will default to a non-noisy level and can be raised to `DEBUG` when debugging jump failures.
 
-The first implementation pass will keep scope narrow: initialize logging once at process startup, then add targeted logs to the frontend click path, the backend D-Bus `JumpToSession` handler, and the runtime process inspection and jump logic in `linux_agent_shell/runtime/processes.py`.
+The first implementation pass will keep scope narrow: initialize logging once at process startup, then add targeted logs to the frontend click path, the backend D-Bus `JumpToSession` handler, and the runtime process inspection and jump logic in `linux_agent_island/runtime/processes.py`.
 
 ## Alternatives Considered
 
@@ -22,7 +22,7 @@ This is faster in the moment but creates inconsistent output, no central level c
 
 ## Scope
 
-- Extend `~/.config/linux-agent-shell/settings.json` to support `log_level` alongside `top_bar_gap`.
+- Extend `~/.config/linux-agent-island/settings.json` to support `log_level` alongside `top_bar_gap`.
 - Normalize and validate configured log levels, with safe fallback when the value is missing or invalid.
 - Add a shared logging initialization helper so frontend and backend use the same format and level parsing.
 - Initialize logging early in both entrypoints before normal runtime work starts.
@@ -39,7 +39,7 @@ This is faster in the moment but creates inconsistent output, no central level c
 
 ## Configuration
 
-The shared settings file will continue to live at `~/.config/linux-agent-shell/settings.json`. The new shape will be:
+The shared settings file will continue to live at `~/.config/linux-agent-island/settings.json`. The new shape will be:
 
 ```json
 {
@@ -84,7 +84,7 @@ Accepted levels will be standard Python logging names such as `DEBUG`, `INFO`, `
 
 ## Manual Verification
 
-1. Set `"log_level": "DEBUG"` in `~/.config/linux-agent-shell/settings.json`.
+1. Set `"log_level": "DEBUG"` in `~/.config/linux-agent-island/settings.json`.
 2. Restart the frontend and backend processes.
 3. Click a session jump button.
 4. Confirm the logs show the full path from frontend click to backend jump result.

@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from linux_agent_shell.logging_utils import configure_logging, normalize_log_level
+from linux_agent_island.core.logging import configure_logging, normalize_log_level
 
 
 def test_normalize_log_level_accepts_case_insensitive_values() -> None:
@@ -24,7 +24,7 @@ def test_configure_logging_writes_to_file_when_configured(tmp_path: Path) -> Non
     log_path = tmp_path / "logs" / "app.log"
 
     configured = configure_logging("info", log_file_path=log_path)
-    logging.getLogger("linux_agent_shell.test").info("file logging works")
+    logging.getLogger("linux_agent_island.test").info("file logging works")
     for handler in logging.getLogger().handlers:
         handler.flush()
 

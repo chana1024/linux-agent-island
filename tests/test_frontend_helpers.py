@@ -1,4 +1,4 @@
-from linux_agent_shell.frontend import (
+from linux_agent_island.frontend import (
     HIGHLIGHT_DURATION_SECONDS,
     compute_expanded_window_height,
     compute_window_position,
@@ -12,7 +12,7 @@ from linux_agent_shell.frontend import (
     status_dot_css_class,
     summarize_visible_sessions,
 )
-from linux_agent_shell.models import AgentSession, SessionOrigin, SessionPhase
+from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
 
 
 def build_session(

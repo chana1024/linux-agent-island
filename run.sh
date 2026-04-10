@@ -33,9 +33,9 @@ cleanup() {
 
 trap cleanup EXIT
 
-/usr/bin/python3 -m linux_agent_shell.backend --log-level "$log_level" &
+/usr/bin/python3 -m linux_agent_island.backend --log-level "$log_level" &
 backend_pid=$!
 
 sleep 0.5
 
-/usr/bin/python3 -m linux_agent_shell.frontend --log-level "$log_level"
+/usr/bin/python3 -m linux_agent_island.frontend --log-level "$log_level"

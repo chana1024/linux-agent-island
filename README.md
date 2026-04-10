@@ -1,6 +1,6 @@
-# Linux Agent Shell
+# Linux Agent Island
 
-Linux v1 desktop shell for local coding agents.
+Linux v1 desktop island for local coding agents.
 
 Current scope:
 
@@ -28,21 +28,21 @@ One command:
 Backend:
 
 ```bash
-/usr/bin/python3 -m linux_agent_shell.backend
-/usr/bin/python3 -m linux_agent_shell.backend --log-level DEBUG
+/usr/bin/python3 -m linux_agent_island.backend
+/usr/bin/python3 -m linux_agent_island.backend --log-level DEBUG
 ```
 
 Frontend:
 
 ```bash
-/usr/bin/python3 -m linux_agent_shell.frontend
-/usr/bin/python3 -m linux_agent_shell.frontend --log-level DEBUG
+/usr/bin/python3 -m linux_agent_island.frontend
+/usr/bin/python3 -m linux_agent_island.frontend --log-level DEBUG
 ```
 
 Frontend settings:
 
 ```json
-~/.config/linux-agent-shell/settings.json
+~/.config/linux-agent-island/settings.json
 {
   "top_bar_gap": 8
 }
@@ -50,12 +50,20 @@ Frontend settings:
 
 Logs:
 
-- `~/.local/state/linux-agent-shell/logs/backend.log`
-- `~/.local/state/linux-agent-shell/logs/frontend.log`
+- `~/.local/state/linux-agent-island/logs/backend.log`
+- `~/.local/state/linux-agent-island/logs/frontend.log`
+
+## Code Layout
+
+- `linux_agent_island/app/`: D-Bus backend service and GTK frontend
+- `linux_agent_island/core/`: configuration, logging, session models, and store
+- `linux_agent_island/providers/`: Claude Code and Codex CLI hook/session adapters
+- `linux_agent_island/runtime/`: event socket, process inspection, and session cache
+- `bin/`: hook shims installed into Claude Code and Codex config
 
 Tests:
 
 ```bash
-cd linux-agent-shell
+cd linux-agent-island
 /usr/bin/python3 -m pytest
 ```

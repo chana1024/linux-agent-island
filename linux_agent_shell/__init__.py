@@ -1,2 +1,0 @@
-"""Linux Agent Shell package."""
-

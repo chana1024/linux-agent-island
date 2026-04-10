@@ -3,15 +3,14 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "linux-agent-shell"
+name = "linux-agent-island"
 version = "0.1.0"
-description = "Linux floating island shell for Claude Code and Codex CLI"
+description = "Linux floating island for Claude Code and Codex CLI sessions"
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["linux_agent_shell*"]
+include = ["linux_agent_island*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove Linux Agent Shell's Codex `PreToolUse` and `PostToolUse` hook noise while keeping session lifecycle updates driven by `SessionStart`, `UserPromptSubmit`, and `Stop`.
+**Goal:** Remove Linux Agent Island's Codex `PreToolUse` and `PostToolUse` hook noise while keeping session lifecycle updates driven by `SessionStart`, `UserPromptSubmit`, and `Stop`.
 
 **Architecture:** Change Codex hook installation so the provider only manages the three desired events and actively removes this project's previously installed `PreToolUse` and `PostToolUse` commands from `~/.codex/hooks.json`. Keep unrelated user-defined hooks untouched, and prove the behavior with test-first updates in the Codex provider test file.
 
@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- Modify: `linux_agent_shell/providers/codex.py`
+- Modify: `linux_agent_island/providers/codex.py`
   Responsibility: define the managed Codex hook event set, merge required hooks, and prune this project's old managed hook commands for events that are no longer desired.
 - Modify: `tests/test_codex_provider.py`
   Responsibility: update expectations for required Codex hooks and add regression coverage for pruning managed `PreToolUse` and `PostToolUse` commands while preserving unrelated hooks.
@@ -55,7 +55,7 @@ def test_codex_provider_merges_required_hooks(tmp_path: Path) -> None:
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -72,8 +72,8 @@ def test_codex_provider_removes_managed_pre_and_post_hooks_but_keeps_unrelated_h
     tmp_path: Path,
 ) -> None:
     hooks_path = tmp_path / "hooks.json"
-    managed_pre = "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py PreToolUse"
-    managed_post = "/usr/bin/python3 /opt/linux-agent-shell/codex-hook.py PostToolUse"
+    managed_pre = "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py PreToolUse"
+    managed_post = "/usr/bin/python3 /opt/linux-agent-island/codex-hook.py PostToolUse"
     hooks_path.write_text(
         json.dumps(
             {
@@ -115,7 +115,7 @@ def test_codex_provider_removes_managed_pre_and_post_hooks_but_keeps_unrelated_h
         state_db_path=tmp_path / "state.sqlite",
         history_path=tmp_path / "history.jsonl",
         hooks_config_path=hooks_path,
-        hook_script_path=Path("/opt/linux-agent-shell/codex-hook.py"),
+        hook_script_path=Path("/opt/linux-agent-island/codex-hook.py"),
     )
 
     provider.install_hooks()
@@ -137,7 +137,7 @@ def test_codex_provider_removes_managed_pre_and_post_hooks_but_keeps_unrelated_h
 
 - [ ] **Step 2: Run the targeted tests to verify they fail for the right reason**
 
-Run: `cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-shell && /usr/bin/python3 -m pytest tests/test_codex_provider.py -q`
+Run: `cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-island && /usr/bin/python3 -m pytest tests/test_codex_provider.py -q`
 
 Expected: FAIL because `install_hooks()` still adds `PreToolUse` and `PostToolUse`, and it does not prune previously managed commands.
 
@@ -145,19 +145,19 @@ Expected: FAIL because `install_hooks()` still adds `PreToolUse` and `PostToolUs
 
 ```bash
 cd /home/lzn/.openclaw/workspace/coder-space/claude-island
-git add linux-agent-shell/tests/test_codex_provider.py
+git add linux-agent-island/tests/test_codex_provider.py
 git commit -m "test: define Codex hook noise reduction behavior"
 ```
 
 ### Task 2: Implement Codex hook pruning and reduced installation set
 
 **Files:**
-- Modify: `linux_agent_shell/providers/codex.py`
+- Modify: `linux_agent_island/providers/codex.py`
 - Test: `tests/test_codex_provider.py`
 
 - [ ] **Step 1: Write the minimal implementation**
 
-Refactor `linux_agent_shell/providers/codex.py` so it manages only the desired events and prunes this project's stale `PreToolUse` and `PostToolUse` commands.
+Refactor `linux_agent_island/providers/codex.py` so it manages only the desired events and prunes this project's stale `PreToolUse` and `PostToolUse` commands.
 
 ```python
 class CodexProvider:
@@ -222,13 +222,13 @@ class CodexProvider:
 
 - [ ] **Step 2: Run the targeted tests to verify they pass**
 
-Run: `cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-shell && /usr/bin/python3 -m pytest tests/test_codex_provider.py -q`
+Run: `cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-island && /usr/bin/python3 -m pytest tests/test_codex_provider.py -q`
 
 Expected: PASS with all tests in `tests/test_codex_provider.py` green.
 
 - [ ] **Step 3: Run the adjacent hook and store regression tests**
 
-Run: `cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-shell && /usr/bin/python3 -m pytest tests/test_hooks.py tests/test_store.py -q`
+Run: `cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-island && /usr/bin/python3 -m pytest tests/test_hooks.py tests/test_store.py -q`
 
 Expected: PASS, confirming the reduced Codex hook set does not break hook event translation or session store lifecycle behavior.
 
@@ -236,7 +236,7 @@ Expected: PASS, confirming the reduced Codex hook set does not break hook event 
 
 ```bash
 cd /home/lzn/.openclaw/workspace/coder-space/claude-island
-git add linux-agent-shell/linux_agent_shell/providers/codex.py linux-agent-shell/tests/test_codex_provider.py
+git add linux-agent-island/linux_agent_island/providers/codex.py linux-agent-island/tests/test_codex_provider.py
 git commit -m "feat: remove Codex tool hook noise"
 ```
 
@@ -244,24 +244,24 @@ git commit -m "feat: remove Codex tool hook noise"
 
 **Files:**
 - Modify: none
-- Test: `linux_agent_shell/providers/codex.py`
+- Test: `linux_agent_island/providers/codex.py`
 
 - [ ] **Step 1: Run the provider installation path against a temporary hooks file**
 
 Run:
 
 ```bash
-cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-shell
+cd /home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-island
 /usr/bin/python3 - <<'PY'
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from linux_agent_shell.providers.codex import CodexProvider
+from linux_agent_island.providers.codex import CodexProvider
 
 with TemporaryDirectory() as tmp:
     hooks_path = Path(tmp) / "hooks.json"
-    hook_script = Path("/opt/linux-agent-shell/codex-hook.py")
+    hook_script = Path("/opt/linux-agent-island/codex-hook.py")
     hooks_path.write_text(json.dumps({
         "hooks": {
             "PreToolUse": [{"hooks": [{"type": "command", "command": f"/usr/bin/python3 {hook_script} PreToolUse", "timeout": 10}]}],

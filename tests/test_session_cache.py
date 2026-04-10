@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from linux_agent_shell.models import AgentSession, SessionOrigin, SessionPhase
-from linux_agent_shell.runtime.session_cache import SessionCache
+from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
+from linux_agent_island.runtime.session_cache import SessionCache
 
 
 def test_session_cache_round_trips_session_metadata(tmp_path: Path) -> None:
