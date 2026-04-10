@@ -349,10 +349,14 @@ class FrontendApp(Gtk.Application):
     def _on_session_jump_clicked(self, session: AgentSession) -> None:
         self._clear_session_highlight(session_key(session))
         logger.info(
-            "jump button clicked provider=%s session_id=%s pid=%s",
+            "jump button clicked provider=%s session_id=%s pid=%s tty=%s cwd=%s has_window=%s focused=%s",
             session.provider,
             session.session_id,
             session.pid,
+            session.tty,
+            session.cwd,
+            session.has_interactive_window,
+            session.is_focused,
         )
         self._jump_to_session(session.provider, session.session_id)
 
@@ -360,7 +364,7 @@ class FrontendApp(Gtk.Application):
         if self.proxy is None:
             logger.warning("JumpToSession skipped because D-Bus proxy is unavailable")
             return False
-        logger.debug("calling JumpToSession provider=%s session_id=%s", provider, session_id)
+        logger.info("calling JumpToSession provider=%s session_id=%s", provider, session_id)
         try:
             result = self.proxy.call_sync(
                 "JumpToSession",
@@ -378,12 +382,20 @@ class FrontendApp(Gtk.Application):
             )
             return False
         jumped = bool(result.unpack()[0])
-        logger.info(
-            "JumpToSession returned provider=%s session_id=%s jumped=%s",
-            provider,
-            session_id,
-            jumped,
-        )
+        if jumped:
+            logger.info(
+                "JumpToSession returned provider=%s session_id=%s jumped=%s",
+                provider,
+                session_id,
+                jumped,
+            )
+        else:
+            logger.warning(
+                "JumpToSession returned provider=%s session_id=%s jumped=%s",
+                provider,
+                session_id,
+                jumped,
+            )
         return jumped
 
     def _apply_session_update(self, sessions: list[AgentSession]) -> None:
@@ -728,8 +740,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--log-level", default="INFO")
     args, remaining = parser.parse_known_args(argv)
-    level_name = configure_logging(args.log_level)
+    config = AppConfig.default()
+    log_file_path = config.runtime_dir / "logs" / "frontend.log"
+    level_name = configure_logging(args.log_level, log_file_path=log_file_path)
     logger.info("frontend logging initialized level=%s", level_name)
+    logger.info("frontend log file=%s", log_file_path)
     app = FrontendApp()
     return app.run(remaining)
 

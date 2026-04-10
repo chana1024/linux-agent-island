@@ -171,12 +171,20 @@ class BackendService:
                     session.cwd,
                 )
                 jumped = self.process_inspector.jump_to_session(session)
-            logger.info(
-                "JumpToSession finished provider=%s session_id=%s jumped=%s",
-                provider,
-                session_id,
-                jumped,
-            )
+            if jumped:
+                logger.info(
+                    "JumpToSession finished provider=%s session_id=%s jumped=%s",
+                    provider,
+                    session_id,
+                    jumped,
+                )
+            else:
+                logger.warning(
+                    "JumpToSession finished provider=%s session_id=%s jumped=%s",
+                    provider,
+                    session_id,
+                    jumped,
+                )
             invocation.return_value(GLib.Variant("(b)", (jumped,)))
             return
         if method_name == "ArchiveSession":
@@ -228,9 +236,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--log-level", default="INFO")
     args, _unknown = parser.parse_known_args(argv)
-    level_name = configure_logging(args.log_level)
+    config = AppConfig.default()
+    log_file_path = config.runtime_dir / "logs" / "backend.log"
+    level_name = configure_logging(args.log_level, log_file_path=log_file_path)
     logger.info("backend logging initialized level=%s", level_name)
-    BackendService().start()
+    logger.info("backend log file=%s", log_file_path)
+    BackendService(config=config).start()
     return 0
 
 

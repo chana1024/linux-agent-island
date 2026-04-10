@@ -36,6 +36,7 @@ class ProcessInfo:
     ppid: int
     command: str
     tty: str | None
+    args: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +70,16 @@ class AgentProcessInfo:
 @dataclass(frozen=True, slots=True)
 class WindowInfo:
     window_id: str
+    desktop: int | None
     pid: int
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
+class TmuxClientCandidate:
+    client: TmuxClientInfo
+    window: WindowInfo | None
+    session_matches_target: bool = False
 
 
 def parse_visible_window_pids(output: str) -> set[int]:
@@ -88,21 +98,23 @@ def parse_visible_window_pids(output: str) -> set[int]:
 def parse_windows(output: str) -> list[WindowInfo]:
     windows: list[WindowInfo] = []
     for line in output.splitlines():
-        parts = line.split()
-        if len(parts) < 3:
+        parts = line.split(maxsplit=4)
+        if len(parts) < 4:
             continue
         try:
+            desktop = int(parts[1])
             pid = int(parts[2])
         except ValueError:
             continue
-        windows.append(WindowInfo(window_id=parts[0], pid=pid))
+        title = parts[4] if len(parts) > 4 else ""
+        windows.append(WindowInfo(window_id=parts[0], desktop=desktop, pid=pid, title=title))
     return windows
 
 
 def parse_process_tree(output: str) -> dict[int, ProcessInfo]:
     tree: dict[int, ProcessInfo] = {}
     for line in output.splitlines():
-        parts = line.strip().split(maxsplit=3)
+        parts = line.strip().split(maxsplit=4)
         if len(parts) < 4:
             continue
         try:
@@ -111,7 +123,8 @@ def parse_process_tree(output: str) -> dict[int, ProcessInfo]:
         except ValueError:
             continue
         tty = None if parts[2] in {"??", "-"} else parts[2]
-        tree[pid] = ProcessInfo(pid=pid, ppid=ppid, command=parts[3], tty=tty)
+        args = parts[4] if len(parts) > 4 else ""
+        tree[pid] = ProcessInfo(pid=pid, ppid=ppid, command=parts[3], tty=tty, args=args)
     return tree
 
 
@@ -162,8 +175,23 @@ def parse_tmux_clients(output: str) -> list[TmuxClientInfo]:
     return clients
 
 
+def is_guake_process(info: ProcessInfo) -> bool:
+    args = info.args.strip()
+    return info.command == "guake" or args.endswith("/usr/bin/guake") or "/usr/bin/guake " in args
+
+
 class SessionProcessInspector:
-    def _run_command(self, args: list[str], timeout: int = 2) -> subprocess.CompletedProcess[str] | None:
+    def is_terminal_process(self, info: ProcessInfo) -> bool:
+        return info.command in TERMINAL_NAMES or is_guake_process(info)
+
+    def _run_command(
+        self,
+        args: list[str],
+        timeout: int = 2,
+        *,
+        log_commands: bool = False,
+        command_context: str | None = None,
+    ) -> subprocess.CompletedProcess[str] | None:
         try:
             result = subprocess.run(
                 args,
@@ -173,31 +201,64 @@ class SessionProcessInspector:
                 check=False,
             )
         except OSError as exc:
-            logger.warning("command failed to start args=%s error=%s", args, exc)
+            if command_context is None:
+                logger.warning("command failed to start args=%s error=%s", args, exc)
+            else:
+                logger.warning(
+                    "command failed to start context=%s args=%s error=%s",
+                    command_context,
+                    args,
+                    exc,
+                )
             return None
-        logger.debug("command finished args=%s returncode=%s", args, result.returncode)
+        if log_commands:
+            if command_context is None:
+                logger.debug("command finished args=%s returncode=%s", args, result.returncode)
+            else:
+                logger.debug(
+                    "command finished context=%s args=%s returncode=%s",
+                    command_context,
+                    args,
+                    result.returncode,
+                )
         return result
 
-    def build_process_tree(self) -> dict[int, ProcessInfo]:
-        result = self._run_command(["ps", "-eo", "pid,ppid,tty,comm"])
+    def build_process_tree(self, *, log_commands: bool = False) -> dict[int, ProcessInfo]:
+        result = self._run_command(
+            ["ps", "-eo", "pid,ppid,tty,comm,args"],
+            log_commands=log_commands,
+            command_context="build_process_tree",
+        )
         if result is None:
             return {}
         return parse_process_tree(result.stdout)
 
-    def visible_window_pids(self) -> set[int]:
-        result = self._run_command(["wmctrl", "-lp"])
+    def visible_window_pids(self, *, log_commands: bool = False) -> set[int]:
+        result = self._run_command(
+            ["wmctrl", "-lp"],
+            log_commands=log_commands,
+            command_context="visible_window_pids",
+        )
         if result is None:
             return set()
         return parse_visible_window_pids(result.stdout)
 
-    def list_windows(self) -> list[WindowInfo]:
-        result = self._run_command(["wmctrl", "-lp"])
+    def list_windows(self, *, log_commands: bool = False) -> list[WindowInfo]:
+        result = self._run_command(
+            ["wmctrl", "-lp"],
+            log_commands=log_commands,
+            command_context="list_windows",
+        )
         if result is None:
             return []
         return parse_windows(result.stdout)
 
-    def active_window_pid(self) -> int | None:
-        result = self._run_command(["xdotool", "getactivewindow", "getwindowpid"])
+    def active_window_pid(self, *, log_commands: bool = False) -> int | None:
+        result = self._run_command(
+            ["xdotool", "getactivewindow", "getwindowpid"],
+            log_commands=log_commands,
+            command_context="active_window_pid",
+        )
         if result is None:
             return None
         try:
@@ -205,7 +266,7 @@ class SessionProcessInspector:
         except ValueError:
             return None
 
-    def list_tmux_panes(self) -> list[TmuxPaneInfo]:
+    def list_tmux_panes(self, *, log_commands: bool = False) -> list[TmuxPaneInfo]:
         result = self._run_command(
             [
                 "tmux",
@@ -213,34 +274,47 @@ class SessionProcessInspector:
                 "-a",
                 "-F",
                 "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_pid}\t#{pane_active}\t#{window_active}\t#{session_attached}",
-            ]
+            ],
+            log_commands=log_commands,
+            command_context="list_tmux_panes",
         )
         if result is None:
             return []
         return parse_tmux_panes(result.stdout)
 
-    def list_tmux_clients(self) -> list[TmuxClientInfo]:
+    def list_tmux_clients(self, *, log_commands: bool = False) -> list[TmuxClientInfo]:
         result = self._run_command(
             [
                 "tmux",
                 "list-clients",
                 "-F",
                 "#{client_pid}\t#{session_id}\t#{client_tty}\t#{client_flags}",
-            ]
+            ],
+            log_commands=log_commands,
+            command_context="list_tmux_clients",
         )
         if result is None:
             return []
         return parse_tmux_clients(result.stdout)
 
-    def process_cwd(self, pid: int) -> str | None:
-        result = self._run_command(["pwdx", str(pid)])
+    def process_cwd(self, pid: int, *, log_commands: bool = False) -> str | None:
+        result = self._run_command(
+            ["pwdx", str(pid)],
+            log_commands=log_commands,
+            command_context="process_cwd",
+        )
         if result is None:
             return None
         if result.returncode != 0 or ":" not in result.stdout:
             return None
         return result.stdout.split(":", 1)[1].strip() or None
 
-    def list_agent_processes(self, tree: dict[int, ProcessInfo]) -> list[AgentProcessInfo]:
+    def list_agent_processes(
+        self,
+        tree: dict[int, ProcessInfo],
+        *,
+        log_commands: bool = False,
+    ) -> list[AgentProcessInfo]:
         agent_processes: list[AgentProcessInfo] = []
         for info in tree.values():
             provider = next(
@@ -254,7 +328,7 @@ class SessionProcessInspector:
                     provider=provider,
                     pid=info.pid,
                     tty=info.tty,
-                    cwd=self.process_cwd(info.pid),
+                    cwd=self.process_cwd(info.pid, log_commands=log_commands),
                 )
             )
         return agent_processes
@@ -295,11 +369,43 @@ class SessionProcessInspector:
             info = tree.get(current)
             if info is None:
                 return None
-            if info.command in TERMINAL_NAMES:
+            if self.is_terminal_process(info):
                 return current
             current = info.ppid
             depth += 1
         return None
+
+    def is_guake_pid(self, pid: int, tree: dict[int, ProcessInfo]) -> bool:
+        info = tree.get(pid)
+        return info is not None and is_guake_process(info)
+
+    def reveal_terminal_for_pid(
+        self,
+        pid: int,
+        tree: dict[int, ProcessInfo],
+        *,
+        log_commands: bool = False,
+    ) -> bool:
+        terminal_pid = self.find_terminal_pid(pid, tree)
+        if terminal_pid is None or not self.is_guake_pid(terminal_pid, tree):
+            return False
+        shown = self.show_guake(log_commands=log_commands)
+        if shown:
+            logger.info("reveal_terminal_for_pid showed guake terminal_pid=%s pid=%s", terminal_pid, pid)
+        else:
+            logger.warning("reveal_terminal_for_pid failed to show guake terminal_pid=%s pid=%s", terminal_pid, pid)
+        return shown
+
+    def show_guake(self, *, log_commands: bool = False) -> bool:
+        result = self._run_command(
+            ["guake", "--show"],
+            timeout=3,
+            log_commands=log_commands,
+            command_context="show_guake",
+        )
+        if result is None:
+            return False
+        return result.returncode == 0
 
     def ancestor_pids(self, pid: int, tree: dict[int, ProcessInfo]) -> list[int]:
         current = pid
@@ -334,29 +440,71 @@ class SessionProcessInspector:
                 return window
         return None
 
-    def find_tmux_client(
+    def tmux_client_candidates(
         self,
         pane: TmuxPaneInfo,
         clients: list[TmuxClientInfo],
-    ) -> TmuxClientInfo | None:
-        session_clients = [client for client in clients if client.session_id == pane.session_id]
-        if not session_clients:
+        tree: dict[int, ProcessInfo],
+        windows: list[WindowInfo],
+    ) -> list[TmuxClientCandidate]:
+        return [
+            TmuxClientCandidate(
+                client=client,
+                window=self.find_window_for_pid_chain(client.client_pid, tree, windows),
+                session_matches_target=client.session_id == pane.session_id,
+            )
+            for client in clients
+        ]
+
+    def find_tmux_client(self, candidates: list[TmuxClientCandidate]) -> TmuxClientInfo | None:
+        if not candidates:
             return None
-        focused_client = next((client for client in session_clients if client.is_focused), None)
+        matching_candidates = [candidate for candidate in candidates if candidate.session_matches_target]
+        base_candidates = matching_candidates or candidates
+        windowed_candidates = [candidate for candidate in base_candidates if candidate.window is not None]
+        preferred_candidates = windowed_candidates or base_candidates
+        focused_client = next(
+            (candidate.client for candidate in preferred_candidates if candidate.client.is_focused),
+            None,
+        )
         if focused_client is not None:
             return focused_client
-        attached_client = next((client for client in session_clients if client.is_attached), None)
+        attached_client = next(
+            (candidate.client for candidate in preferred_candidates if candidate.client.is_attached),
+            None,
+        )
         if attached_client is not None:
             return attached_client
-        return session_clients[0]
+        return preferred_candidates[0].client
 
-    def activate_window(self, window_id: str) -> bool:
-        result = self._run_command(["wmctrl", "-i", "-a", window_id])
+    def activate_window(self, window_id: str, *, log_commands: bool = False) -> bool:
+        result = self._run_command(
+            ["wmctrl", "-i", "-a", window_id],
+            log_commands=log_commands,
+            command_context="activate_window",
+        )
         if result is None:
             return False
         return result.returncode == 0
 
-    def select_tmux_pane(self, pane: TmuxPaneInfo, client: TmuxClientInfo | None) -> bool:
+    def activate_window_for_pid(
+        self,
+        window: WindowInfo,
+        pid: int,
+        tree: dict[int, ProcessInfo],
+        *,
+        log_commands: bool = False,
+    ) -> bool:
+        self.reveal_terminal_for_pid(pid, tree, log_commands=log_commands)
+        return self.activate_window(window.window_id, log_commands=log_commands)
+
+    def select_tmux_pane(
+        self,
+        pane: TmuxPaneInfo,
+        client: TmuxClientInfo | None,
+        *,
+        log_commands: bool = False,
+    ) -> bool:
         commands: list[list[str]] = []
         if client is not None and client.client_tty:
             commands.append(["tmux", "switch-client", "-c", client.client_tty, "-t", pane.session_id])
@@ -368,7 +516,11 @@ class SessionProcessInspector:
         )
         succeeded = False
         for args in commands:
-            result = self._run_command(args)
+            result = self._run_command(
+                args,
+                log_commands=log_commands,
+                command_context="select_tmux_pane",
+            )
             if result is None:
                 continue
             succeeded = succeeded or result.returncode == 0
@@ -443,7 +595,7 @@ class SessionProcessInspector:
             session.session_id,
             session.pid,
         )
-        tree = self.build_process_tree()
+        tree = self.build_process_tree(log_commands=True)
         if session.pid is None:
             logger.warning(
                 "jump_to_session aborted because session has no pid provider=%s session_id=%s",
@@ -451,8 +603,8 @@ class SessionProcessInspector:
                 session.session_id,
             )
             return False
-        windows = self.list_windows()
-        panes = self.list_tmux_panes()
+        windows = self.list_windows(log_commands=True)
+        panes = self.list_tmux_panes(log_commands=True)
         logger.debug(
             "jump_to_session context provider=%s session_id=%s process_count=%s window_count=%s tmux_pane_count=%s",
             session.provider,
@@ -470,7 +622,43 @@ class SessionProcessInspector:
                 pane.pane_id,
                 pane.window_id,
             )
-            client = self.find_tmux_client(pane, self.list_tmux_clients())
+            tmux_clients = self.list_tmux_clients(log_commands=True)
+            client_candidates = self.tmux_client_candidates(
+                pane,
+                tmux_clients,
+                tree,
+                windows,
+            )
+            logger.debug(
+                "jump_to_session tmux candidates provider=%s session_id=%s candidates=%s",
+                session.provider,
+                session.session_id,
+                [
+                    {
+                        "client_pid": candidate.client.client_pid,
+                        "client_session_id": candidate.client.session_id,
+                        "client_tty": candidate.client.client_tty,
+                        "attached": candidate.client.is_attached,
+                        "focused": candidate.client.is_focused,
+                        "session_matches_target": candidate.session_matches_target,
+                        "window_id": None if candidate.window is None else candidate.window.window_id,
+                        "window_pid": None if candidate.window is None else candidate.window.pid,
+                        "window_desktop": None if candidate.window is None else candidate.window.desktop,
+                        "window_title": None if candidate.window is None else candidate.window.title,
+                    }
+                    for candidate in client_candidates
+                ],
+            )
+            client = self.find_tmux_client(client_candidates)
+            if client is not None and client.session_id != pane.session_id:
+                logger.info(
+                    "jump_to_session falling back to external tmux client provider=%s session_id=%s client_pid=%s client_session_id=%s target_session_id=%s",
+                    session.provider,
+                    session.session_id,
+                    client.client_pid,
+                    client.session_id,
+                    pane.session_id,
+                )
             logger.debug(
                 "jump_to_session tmux client provider=%s session_id=%s client_pid=%s client_tty=%s",
                 session.provider,
@@ -478,10 +666,27 @@ class SessionProcessInspector:
                 None if client is None else client.client_pid,
                 None if client is None else client.client_tty,
             )
-            selected = self.select_tmux_pane(pane, client)
+            selected = self.select_tmux_pane(pane, client, log_commands=True)
             if client is not None:
+                if self.reveal_terminal_for_pid(client.client_pid, tree, log_commands=True):
+                    windows = self.list_windows(log_commands=True)
                 window = self.find_window_for_pid_chain(client.client_pid, tree, windows)
-                if window is not None and self.activate_window(window.window_id):
+                logger.debug(
+                    "jump_to_session tmux selected window provider=%s session_id=%s client_pid=%s window_id=%s window_pid=%s window_desktop=%s window_title=%s",
+                    session.provider,
+                    session.session_id,
+                    client.client_pid,
+                    None if window is None else window.window_id,
+                    None if window is None else window.pid,
+                    None if window is None else window.desktop,
+                    None if window is None else window.title,
+                )
+                if window is not None and self.activate_window_for_pid(
+                    window,
+                    client.client_pid,
+                    tree,
+                    log_commands=True,
+                ):
                     logger.info(
                         "jump_to_session succeeded via tmux client window provider=%s session_id=%s window_id=%s",
                         session.provider,
@@ -489,8 +694,24 @@ class SessionProcessInspector:
                         window.window_id,
                     )
                     return True
+            if self.reveal_terminal_for_pid(session.pid, tree, log_commands=True):
+                windows = self.list_windows(log_commands=True)
             window = self.find_window_for_pid_chain(session.pid, tree, windows)
-            if window is not None and self.activate_window(window.window_id):
+            logger.debug(
+                "jump_to_session session fallback window provider=%s session_id=%s window_id=%s window_pid=%s window_desktop=%s window_title=%s",
+                session.provider,
+                session.session_id,
+                None if window is None else window.window_id,
+                None if window is None else window.pid,
+                None if window is None else window.desktop,
+                None if window is None else window.title,
+            )
+            if window is not None and self.activate_window_for_pid(
+                window,
+                session.pid,
+                tree,
+                log_commands=True,
+            ):
                 logger.info(
                     "jump_to_session succeeded via session window after tmux select provider=%s session_id=%s window_id=%s",
                     session.provider,
@@ -506,6 +727,8 @@ class SessionProcessInspector:
             )
             return selected
 
+        if self.reveal_terminal_for_pid(session.pid, tree, log_commands=True):
+            windows = self.list_windows(log_commands=True)
         window = self.find_window_for_pid_chain(session.pid, tree, windows)
         if window is None:
             logger.warning(
@@ -516,12 +739,15 @@ class SessionProcessInspector:
             )
             return False
         logger.debug(
-            "jump_to_session using direct window path provider=%s session_id=%s window_id=%s",
+            "jump_to_session using direct window path provider=%s session_id=%s window_id=%s window_pid=%s window_desktop=%s window_title=%s",
             session.provider,
             session.session_id,
             window.window_id,
+            window.pid,
+            window.desktop,
+            window.title,
         )
-        activated = self.activate_window(window.window_id)
+        activated = self.activate_window_for_pid(window, session.pid, tree, log_commands=True)
         if not activated:
             logger.warning(
                 "jump_to_session failed to activate window provider=%s session_id=%s window_id=%s",

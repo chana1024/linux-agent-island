@@ -3,6 +3,7 @@ from linux_agent_shell.runtime.processes import (
     AgentProcessInfo,
     ProcessInfo,
     SessionProcessInspector,
+    TmuxClientCandidate,
     TmuxClientInfo,
     TmuxPaneInfo,
     WindowInfo,
@@ -31,8 +32,8 @@ def test_parse_windows_reads_window_id_and_pid() -> None:
     windows = parse_windows(output)
 
     assert windows == [
-        WindowInfo(window_id="0x03e00007", pid=321),
-        WindowInfo(window_id="0x03e00008", pid=654),
+        WindowInfo(window_id="0x03e00007", desktop=0, pid=321, title="Terminal"),
+        WindowInfo(window_id="0x03e00008", desktop=0, pid=654, title="Firefox"),
     ]
 
 
@@ -134,6 +135,246 @@ def test_process_inspector_marks_tmux_session_as_windowed_and_focused() -> None:
     assert annotated[0].is_focused is True
 
 
+def test_find_tmux_client_prefers_windowed_attached_candidate() -> None:
+    inspector = SessionProcessInspector()
+    candidates = [
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=1,
+                session_id="$1",
+                client_tty="/dev/pts/1",
+                is_attached=False,
+                is_focused=True,
+            ),
+            window=None,
+        ),
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=2,
+                session_id="$1",
+                client_tty="/dev/pts/2",
+                is_attached=True,
+                is_focused=False,
+            ),
+            window=WindowInfo(window_id="0x03e00007", desktop=0, pid=200, title="Terminal"),
+        ),
+    ]
+
+    selected = inspector.find_tmux_client(candidates)
+
+    assert selected == candidates[1].client
+
+
+def test_find_tmux_client_falls_back_to_non_target_session_candidate() -> None:
+    inspector = SessionProcessInspector()
+    candidates = [
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=1,
+                session_id="$1",
+                client_tty="/dev/pts/1",
+                is_attached=True,
+                is_focused=True,
+            ),
+            window=WindowInfo(window_id="0x03e00007", desktop=0, pid=200, title="Guake!"),
+            session_matches_target=False,
+        ),
+    ]
+
+    selected = inspector.find_tmux_client(candidates)
+
+    assert selected == candidates[0].client
+
+
+def test_build_process_tree_does_not_log_commands_by_default(monkeypatch, caplog) -> None:
+    inspector = SessionProcessInspector()
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        class Result:
+            stdout = "100 1 pts/7 codex codex --yolo\n"
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+
+    with caplog.at_level("DEBUG"):
+        tree = inspector.build_process_tree()
+
+    assert tree[100] == ProcessInfo(pid=100, ppid=1, command="codex", tty="pts/7", args="codex --yolo")
+    assert "command finished" not in caplog.text
+
+
+def test_activate_window_logs_commands_when_enabled(monkeypatch, caplog) -> None:
+    inspector = SessionProcessInspector()
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+
+    with caplog.at_level("DEBUG"):
+        activated = inspector.activate_window("0x03e00007", log_commands=True)
+
+    assert activated is True
+    assert "command finished context=activate_window" in caplog.text
+
+
+def test_activate_window_for_guake_shows_window_before_activation(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    tree = {
+        188951: ProcessInfo(
+            pid=188951,
+            ppid=1,
+            command="python3",
+            tty=None,
+            args="/usr/bin/python3 /usr/bin/guake",
+        )
+    }
+    window = WindowInfo(window_id="0x03e00007", desktop=0, pid=188951, title="Guake!")
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(args)
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+
+    activated = inspector.activate_window_for_pid(window, window.pid, tree, log_commands=True)
+
+    assert activated is True
+    assert calls == [
+        ["guake", "--show"],
+        ["wmctrl", "-i", "-a", "0x03e00007"],
+    ]
+
+
+def test_jump_to_session_reveals_hidden_guake_tmux_window(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    session = AgentSession(
+        provider="codex",
+        session_id="jump",
+        cwd="/tmp/demo",
+        title="Jump",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        pid=333,
+    )
+    tree = {
+        333: ProcessInfo(pid=333, ppid=222, command="codex", tty="pts/8"),
+        222: ProcessInfo(pid=222, ppid=700, command="zsh", tty="pts/8"),
+        700: ProcessInfo(pid=700, ppid=1, command="tmux: server", tty=None),
+        190751: ProcessInfo(pid=190751, ppid=189012, command="tmux: client", tty="pts/5"),
+        189012: ProcessInfo(pid=189012, ppid=188951, command="zsh", tty="pts/5"),
+        188951: ProcessInfo(
+            pid=188951,
+            ppid=1,
+            command="python3",
+            tty=None,
+            args="/usr/bin/python3 /usr/bin/guake",
+        ),
+    }
+    calls: list[list[str]] = []
+    window = WindowInfo(window_id="0x03e00007", desktop=0, pid=188951, title="Guake!")
+    windows_by_call = [
+        [],
+        [window],
+    ]
+
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(
+        inspector,
+        "list_tmux_panes",
+        lambda **_kwargs: [TmuxPaneInfo(session_id="$1", window_id="@1", pane_id="%3", pane_pid=222, pane_active=True, window_active=True, session_attached=True)],
+    )
+    monkeypatch.setattr(
+        inspector,
+        "list_tmux_clients",
+        lambda **_kwargs: [TmuxClientInfo(client_pid=190751, session_id="$1", client_tty="/dev/pts/5", is_attached=True, is_focused=True)],
+    )
+    monkeypatch.setattr(inspector, "list_windows", lambda **_kwargs: windows_by_call.pop(0) if windows_by_call else [window])
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(args)
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+
+    assert inspector.jump_to_session(session) is True
+    assert ["guake", "--show"] in calls
+    assert ["wmctrl", "-i", "-a", "0x03e00007"] in calls
+
+
+def test_jump_to_session_uses_external_tmux_client_when_target_session_has_no_client(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    session = AgentSession(
+        provider="codex",
+        session_id="jump",
+        cwd="/tmp/demo",
+        title="Jump",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        pid=333,
+    )
+    tree = {
+        333: ProcessInfo(pid=333, ppid=222, command="codex", tty="/dev/pts/8"),
+        222: ProcessInfo(pid=222, ppid=700, command="zsh", tty="/dev/pts/8"),
+        700: ProcessInfo(pid=700, ppid=1, command="tmux: server", tty=None),
+        190751: ProcessInfo(pid=190751, ppid=189012, command="tmux: client", tty="/dev/pts/5"),
+        189012: ProcessInfo(pid=189012, ppid=188951, command="zsh", tty="/dev/pts/5"),
+        188951: ProcessInfo(
+            pid=188951,
+            ppid=1,
+            command="python3",
+            tty=None,
+            args="/usr/bin/python3 /usr/bin/guake",
+        ),
+    }
+    calls: list[list[str]] = []
+    window = WindowInfo(window_id="0x03e00007", desktop=0, pid=188951, title="Guake!")
+
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(
+        inspector,
+        "list_tmux_panes",
+        lambda **_kwargs: [TmuxPaneInfo(session_id="$2", window_id="@2", pane_id="%9", pane_pid=222, pane_active=True, window_active=True, session_attached=False)],
+    )
+    monkeypatch.setattr(
+        inspector,
+        "list_tmux_clients",
+        lambda **_kwargs: [TmuxClientInfo(client_pid=190751, session_id="$1", client_tty="/dev/pts/5", is_attached=True, is_focused=True)],
+    )
+    monkeypatch.setattr(inspector, "list_windows", lambda **_kwargs: [window])
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(args)
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("linux_agent_shell.runtime.processes.subprocess.run", fake_run)
+
+    assert inspector.jump_to_session(session) is True
+    assert ["tmux", "switch-client", "-c", "/dev/pts/5", "-t", "$2"] in calls
+    assert ["wmctrl", "-i", "-a", "0x03e00007"] in calls
+
+
 def test_reconcile_sessions_does_not_match_multiple_restored_sessions_to_one_cwd_process() -> None:
     inspector = SessionProcessInspector()
     sessions = [
@@ -211,9 +452,13 @@ def test_jump_to_session_activates_matching_terminal_window(monkeypatch) -> None
 
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(inspector, "build_process_tree", lambda: tree)
-    monkeypatch.setattr(inspector, "list_windows", lambda: [WindowInfo(window_id="0x03e00007", pid=50)])
-    monkeypatch.setattr(inspector, "list_tmux_panes", lambda: [])
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(
+        inspector,
+        "list_windows",
+        lambda **_kwargs: [WindowInfo(window_id="0x03e00007", desktop=0, pid=50, title="Terminal")],
+    )
+    monkeypatch.setattr(inspector, "list_tmux_panes", lambda **_kwargs: [])
 
     def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
         calls.append(args)
@@ -252,18 +497,22 @@ def test_jump_to_session_selects_tmux_pane_and_activates_client_window(monkeypat
 
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(inspector, "build_process_tree", lambda: tree)
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
     monkeypatch.setattr(
         inspector,
         "list_tmux_panes",
-        lambda: [TmuxPaneInfo(session_id="$1", window_id="@1", pane_id="%3", pane_pid=222, pane_active=True, window_active=True, session_attached=True)],
+        lambda **_kwargs: [TmuxPaneInfo(session_id="$1", window_id="@1", pane_id="%3", pane_pid=222, pane_active=True, window_active=True, session_attached=True)],
     )
     monkeypatch.setattr(
         inspector,
         "list_tmux_clients",
-        lambda: [TmuxClientInfo(client_pid=190751, session_id="$1", client_tty="/dev/pts/5", is_attached=True, is_focused=True)],
+        lambda **_kwargs: [TmuxClientInfo(client_pid=190751, session_id="$1", client_tty="/dev/pts/5", is_attached=True, is_focused=True)],
     )
-    monkeypatch.setattr(inspector, "list_windows", lambda: [WindowInfo(window_id="0x03e00007", pid=188951)])
+    monkeypatch.setattr(
+        inspector,
+        "list_windows",
+        lambda **_kwargs: [WindowInfo(window_id="0x03e00007", desktop=0, pid=188951, title="Terminal")],
+    )
 
     def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
         calls.append(args)
@@ -323,9 +572,9 @@ def test_jump_to_session_logs_missing_window_match(monkeypatch, caplog) -> None:
         50: ProcessInfo(pid=50, ppid=1, command="gnome-terminal-server", tty=None),
     }
 
-    monkeypatch.setattr(inspector, "build_process_tree", lambda: tree)
-    monkeypatch.setattr(inspector, "list_windows", lambda: [])
-    monkeypatch.setattr(inspector, "list_tmux_panes", lambda: [])
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(inspector, "list_windows", lambda **_kwargs: [])
+    monkeypatch.setattr(inspector, "list_tmux_panes", lambda **_kwargs: [])
 
     with caplog.at_level("WARNING"):
         assert inspector.jump_to_session(session) is False
@@ -353,10 +602,14 @@ def test_jump_to_session_logs_failed_window_activation(monkeypatch, caplog) -> N
         50: ProcessInfo(pid=50, ppid=1, command="gnome-terminal-server", tty=None),
     }
 
-    monkeypatch.setattr(inspector, "build_process_tree", lambda: tree)
-    monkeypatch.setattr(inspector, "list_windows", lambda: [WindowInfo(window_id="0x03e00007", pid=50)])
-    monkeypatch.setattr(inspector, "list_tmux_panes", lambda: [])
-    monkeypatch.setattr(inspector, "activate_window", lambda _window_id: False)
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(
+        inspector,
+        "list_windows",
+        lambda **_kwargs: [WindowInfo(window_id="0x03e00007", desktop=0, pid=50, title="Terminal")],
+    )
+    monkeypatch.setattr(inspector, "list_tmux_panes", lambda **_kwargs: [])
+    monkeypatch.setattr(inspector, "activate_window", lambda _window_id, **_kwargs: False)
 
     with caplog.at_level("WARNING"):
         assert inspector.jump_to_session(session) is False

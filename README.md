@@ -48,6 +48,11 @@ Frontend settings:
 }
 ```
 
+Logs:
+
+- `~/.local/state/linux-agent-shell/logs/backend.log`
+- `~/.local/state/linux-agent-shell/logs/frontend.log`
+
 Tests:
 
 ```bash
