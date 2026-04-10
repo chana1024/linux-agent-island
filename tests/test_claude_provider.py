@@ -76,6 +76,47 @@ def test_claude_provider_removes_old_managed_hook_paths(tmp_path: Path) -> None:
     assert "/venv/bin/python -m linux_agent_island.hooks claude Stop" in stop_commands
 
 
+def test_claude_provider_replaces_old_module_hook_prefix(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    old_command = "PYTHONPATH=/checkout /usr/bin/python3 -m linux_agent_island.hooks claude Stop"
+    new_command = "/venv/bin/python -m linux_agent_island.hooks claude Stop"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {"type": "command", "command": old_command},
+                                {"type": "command", "command": "echo existing"},
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider = ClaudeProvider(
+        settings_path=settings_path,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+    )
+
+    provider.install_hooks()
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    stop_commands = [
+        hook["command"]
+        for entry in payload["hooks"]["Stop"]
+        for hook in entry["hooks"]
+    ]
+
+    assert old_command not in stop_commands
+    assert stop_commands.count(new_command) == 1
+    assert "echo existing" in stop_commands
+
+
 def test_claude_provider_maps_hook_event_to_session_update(tmp_path: Path) -> None:
     provider = ClaudeProvider(
         settings_path=tmp_path / "settings.json",
@@ -122,3 +163,47 @@ def test_claude_provider_maps_permission_requests_to_attention_phase(tmp_path: P
     )
 
     assert session.phase is SessionPhase.WAITING_APPROVAL
+
+
+def test_claude_provider_loads_transcript_from_project_file(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    session_dir = projects_dir / "-tmp-workspace-demo"
+    session_dir.mkdir(parents=True)
+    (session_dir / "claude-1.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "file-history-snapshot"}),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "sessionId": "claude-1",
+                        "timestamp": "2026-04-10T00:00:00Z",
+                        "message": {"role": "user", "content": "hello"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "sessionId": "claude-1",
+                        "timestamp": "2026-04-10T00:00:01Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "hi"}],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    provider = ClaudeProvider(
+        settings_path=tmp_path / "settings.json",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+        projects_dir=projects_dir,
+    )
+
+    assert provider.load_transcript("claude-1", "/tmp/workspace/demo") == [
+        {"role": "user", "text": "hello", "timestamp": "2026-04-10T00:00:00Z"},
+        {"role": "assistant", "text": "hi", "timestamp": "2026-04-10T00:00:01Z"},
+    ]

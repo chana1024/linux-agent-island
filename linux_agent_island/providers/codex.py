@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 from ..core.models import AgentSession, SessionOrigin, SessionPhase
 
@@ -140,9 +142,13 @@ class CodexProvider:
                 if not isinstance(hook, dict):
                     filtered_hooks.append(hook)
                     continue
-                if hook.get("command") in commands or self._looks_like_managed_legacy_command(
-                    hook.get("command"),
-                    event_name,
+                if (
+                    hook.get("command") in commands
+                    or self._looks_like_managed_module_command(hook.get("command"), event_name)
+                    or self._looks_like_managed_legacy_command(
+                        hook.get("command"),
+                        event_name,
+                    )
                 ):
                     continue
                 filtered_hooks.append(hook)
@@ -172,6 +178,7 @@ class CodexProvider:
                     isinstance(hook, dict)
                     and (
                         hook.get("command") in commands
+                        or self._looks_like_managed_module_command(hook.get("command"), event_name)
                         or self._looks_like_managed_legacy_command(hook.get("command"), event_name)
                     )
                 )
@@ -181,6 +188,21 @@ class CodexProvider:
                 updated_entry["hooks"] = filtered_hooks
                 pruned_entries.append(updated_entry)
         return pruned_entries
+
+    def _looks_like_managed_module_command(self, command: object, event_name: str) -> bool:
+        if not isinstance(command, str):
+            return False
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return False
+        for index, token in enumerate(tokens[:-3]):
+            if token != "-m":
+                continue
+            if tokens[index + 1] != "linux_agent_island.hooks":
+                continue
+            return tokens[index + 2 :] == ["codex", event_name]
+        return False
 
     def _looks_like_managed_legacy_command(self, command: object, event_name: str) -> bool:
         if not isinstance(command, str):
@@ -269,6 +291,56 @@ class CodexProvider:
             return False
         return is_codex_subagent_source(row[0])
 
+    def load_transcript(self, session_id: str) -> list[dict[str, str]]:
+        rollout_path = self._rollout_path_for_session(session_id)
+        if rollout_path is None or not rollout_path.exists():
+            return []
+
+        turns: list[dict[str, str]] = []
+        with rollout_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                turn = self._transcript_turn_from_rollout_event(payload)
+                if turn is not None:
+                    turns.append(turn)
+        return turns
+
+    def _rollout_path_for_session(self, session_id: str) -> Path | None:
+        if not session_id or not self.state_db_path.exists():
+            return None
+        conn = sqlite3.connect(self.state_db_path)
+        try:
+            row = conn.execute(
+                "SELECT rollout_path FROM threads WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None or not row[0]:
+            return None
+        return Path(str(row[0])).expanduser()
+
+    def _transcript_turn_from_rollout_event(self, event: dict[str, Any]) -> dict[str, str] | None:
+        if event.get("type") != "response_item":
+            return None
+        payload = event.get("payload")
+        if not isinstance(payload, dict) or payload.get("type") != "message":
+            return None
+        role = str(payload.get("role", ""))
+        if role not in {"user", "assistant"}:
+            return None
+        text = _content_to_text(payload.get("content"))
+        if not text:
+            return None
+        return {
+            "role": role,
+            "text": text,
+            "timestamp": str(event.get("timestamp", "")),
+        }
+
     def _load_last_history_messages(self) -> dict[str, str]:
         messages: dict[str, str] = {}
         if not self.history_path.exists():
@@ -287,3 +359,26 @@ class CodexProvider:
                 if session_id and text:
                     messages[session_id] = text
         return messages
+
+
+def _content_to_text(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            value = item.get("text")
+            if value is None:
+                value = item.get("content")
+            text = str(value) if value is not None else ""
+        else:
+            text = ""
+        text = text.strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()

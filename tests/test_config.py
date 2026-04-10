@@ -18,6 +18,8 @@ def test_default_config_uses_codex_hook_copy_under_home(tmp_path: Path, monkeypa
 
     assert config.codex_hook_script_path == home / ".codex" / "hook" / "codex-hook.py"
     assert config.codex_hook_script_source_path == project_root / "bin" / "codex-hook.py"
+    assert config.gemini_settings_path == home / ".gemini" / "settings.json"
+    assert config.gemini_tmp_dir == home / ".gemini" / "tmp"
     assert config.hook_command_prefix.endswith(" -m linux_agent_island.hooks")
 
 

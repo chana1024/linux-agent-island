@@ -345,6 +345,49 @@ def test_codex_provider_installs_module_hook_command_without_script_copy(tmp_pat
     ]
 
 
+def test_codex_provider_replaces_old_module_hook_prefix(tmp_path: Path) -> None:
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    old_command = "PYTHONPATH=/checkout /usr/bin/python3 -m linux_agent_island.hooks codex Stop"
+    new_command = "/venv/bin/python -m linux_agent_island.hooks codex Stop"
+    hooks_path.parent.mkdir(parents=True)
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {"type": "command", "command": old_command, "timeout": 10},
+                                {"type": "command", "command": "/custom/stop.sh", "timeout": 10},
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider = CodexProvider(
+        state_db_path=tmp_path / "state.sqlite",
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=hooks_path,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+    )
+
+    provider.install_hooks()
+    payload = json.loads(hooks_path.read_text(encoding="utf-8"))
+    stop_commands = [
+        hook["command"]
+        for entry in payload["hooks"]["Stop"]
+        for hook in entry["hooks"]
+    ]
+
+    assert old_command not in stop_commands
+    assert stop_commands.count(new_command) == 1
+    assert "/custom/stop.sh" in stop_commands
+
+
 def test_codex_provider_replaces_old_project_path_with_installed_hook_path(tmp_path: Path) -> None:
     hooks_path = tmp_path / ".codex" / "hooks.json"
     source_path = tmp_path / "project" / "bin" / "codex-hook.py"
@@ -833,3 +876,54 @@ def test_codex_provider_removes_empty_legacy_hook_sections_when_only_managed_hoo
 
     assert "PreToolUse" not in payload["hooks"]
     assert "PostToolUse" not in payload["hooks"]
+
+
+def test_codex_provider_loads_transcript_from_rollout_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    rollout_path = tmp_path / "rollout.jsonl"
+    _write_thread_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE threads SET rollout_path = ? WHERE id = ?", (str(rollout_path), "thread-1"))
+    conn.commit()
+    conn.close()
+    rollout_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {"id": "thread-1"}}),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "hello"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "hi"}],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    provider = CodexProvider(
+        state_db_path=db_path,
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=tmp_path / "hooks.json",
+        hook_script_path=tmp_path / "codex-hook.py",
+    )
+
+    assert provider.load_transcript("thread-1") == [
+        {"role": "user", "text": "hello", "timestamp": "2026-04-10T00:00:00Z"},
+        {"role": "assistant", "text": "hi", "timestamp": "2026-04-10T00:00:01Z"},
+    ]

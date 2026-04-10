@@ -1,6 +1,6 @@
 # Linux Agent Island
 
-Linux Agent Island is a small X11 desktop island for local coding agents. It shows active Claude Code and Codex CLI sessions, keeps state in a background service, and can jump back to the terminal that owns a session.
+Linux Agent Island is a small X11 desktop island for local coding agents. It shows active Claude Code, Codex CLI, and Gemini CLI sessions, keeps state in a background service, and can jump back to the terminal that owns a session.
 
 ## Requirements
 

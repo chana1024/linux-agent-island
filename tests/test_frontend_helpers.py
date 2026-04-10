@@ -1,16 +1,29 @@
 from linux_agent_island.frontend import (
+    Gdk,
     HIGHLIGHT_DURATION_SECONDS,
+    collapsed_status_css_class,
+    collapsed_status_phase,
     compute_expanded_window_height,
     compute_window_position,
+    compute_window_position_for_width,
     detect_completed_sessions,
     expanded_header_title,
     format_session_minutes,
+    has_done_time_label,
+    moved_selection_key,
+    key_state_has_shift,
+    navigation_delta_for_key,
     panel_sessions,
     parse_workarea_top_offset,
     prune_expired_highlights,
     refresh_completion_highlights,
+    session_metadata_tags,
+    session_provider_label,
     status_dot_css_class,
+    should_activate_selected_for_key,
+    should_collapse_layer_for_key,
     summarize_visible_sessions,
+    window_width_for_state,
 )
 from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
 
@@ -177,6 +190,45 @@ def test_panel_sessions_returns_all_visible_sessions_without_truncation() -> Non
     ]
 
 
+def test_session_provider_label_formats_agent_cli_names() -> None:
+    assert session_provider_label("codex") == "Codex"
+    assert session_provider_label("claude") == "Claude Code"
+    assert session_provider_label("gemini") == "Gemini"
+
+
+def test_session_metadata_tags_include_model_and_window_state() -> None:
+    windowed = AgentSession(
+        provider="claude",
+        session_id="windowed",
+        cwd="/tmp/windowed",
+        title="Windowed",
+        phase=SessionPhase.RUNNING,
+        model="sonnet",
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        is_process_alive=True,
+        has_interactive_window=True,
+    )
+    focused = AgentSession(
+        provider="codex",
+        session_id="focused",
+        cwd="/tmp/focused",
+        title="Focused",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        is_process_alive=True,
+        has_interactive_window=True,
+        is_focused=True,
+    )
+
+    assert session_metadata_tags(windowed) == ["Claude Code", "sonnet", "Window"]
+    assert session_metadata_tags(focused) == ["Codex", "Unknown model", "Focused"]
+
+
 def test_panel_sessions_prioritizes_attention_running_then_completed() -> None:
     sessions = [
         AgentSession(
@@ -278,6 +330,15 @@ def test_detect_completed_sessions_ignores_sessions_without_running_predecessor(
     assert completed == []
 
 
+def test_detect_completed_sessions_requires_done_time_label() -> None:
+    previous = {("codex", "missing-completed-at"): SessionPhase.RUNNING}
+    sessions = [
+        build_session("missing-completed-at", phase=SessionPhase.COMPLETED, updated_at=50),
+    ]
+
+    assert detect_completed_sessions(previous, sessions) == []
+
+
 def test_refresh_completion_highlights_uses_latest_completed_session_as_target() -> None:
     older = build_session("older", phase=SessionPhase.COMPLETED, updated_at=120, completed_at=120)
     newer = build_session("newer", phase=SessionPhase.COMPLETED, updated_at=150, completed_at=150)
@@ -293,6 +354,19 @@ def test_refresh_completion_highlights_uses_latest_completed_session_as_target()
     assert highlighted[("codex", "newer")] == 200 + HIGHLIGHT_DURATION_SECONDS
 
 
+def test_refresh_completion_highlights_skips_sessions_without_done_time_label() -> None:
+    missing_done_label = build_session("missing", phase=SessionPhase.COMPLETED, updated_at=150)
+
+    highlighted, target = refresh_completion_highlights(
+        highlighted_until={},
+        completed_sessions=[missing_done_label],
+        now_ts=200,
+    )
+
+    assert highlighted == {}
+    assert target is None
+
+
 def test_prune_expired_highlights_drops_expired_entries() -> None:
     highlighted = {
         ("codex", "keep"): 501,
@@ -305,8 +379,8 @@ def test_prune_expired_highlights_drops_expired_entries() -> None:
 
 
 def test_compute_expanded_window_height_tracks_scroll_area_height() -> None:
-    assert compute_expanded_window_height(session_count=1) == 208
-    assert compute_expanded_window_height(session_count=7) == 472
+    assert compute_expanded_window_height(session_count=1) == 312
+    assert compute_expanded_window_height(session_count=7) == 708
 
 
 def test_format_session_minutes_uses_completed_age_for_completed_sessions() -> None:
@@ -327,6 +401,99 @@ def test_format_session_minutes_uses_completed_age_for_completed_sessions() -> N
     assert format_session_minutes(session, now_ts=220) == "done 2m"
 
 
+def test_done_time_label_requires_completed_at() -> None:
+    done = build_session("done", phase=SessionPhase.COMPLETED, updated_at=100, completed_at=100)
+    completed_without_time = build_session("completed", phase=SessionPhase.COMPLETED, updated_at=100)
+    running = build_session("running", phase=SessionPhase.RUNNING, updated_at=100)
+
+    assert has_done_time_label(done) is True
+    assert has_done_time_label(completed_without_time) is False
+    assert has_done_time_label(running) is False
+
+
 def test_status_dot_css_class_maps_phase_to_css_class() -> None:
     assert status_dot_css_class(SessionPhase.WAITING_APPROVAL) == "status-dot status-attention"
     assert status_dot_css_class(SessionPhase.RUNNING) == "status-dot status-running"
+
+
+def test_compute_window_position_for_expanded_detail_width() -> None:
+    assert compute_window_position_for_width(
+        monitor_x=0,
+        monitor_y=0,
+        monitor_width=1920,
+        top_bar_offset=36,
+        top_bar_gap=8,
+        width=1440,
+    ) == (1440, 240, 44)
+
+
+def test_collapsed_status_prefers_running_session() -> None:
+    sessions = [
+        build_session("done", phase=SessionPhase.COMPLETED, updated_at=1, completed_at=1),
+        build_session("run", phase=SessionPhase.RUNNING, updated_at=2),
+    ]
+
+    assert collapsed_status_phase(sessions) is SessionPhase.RUNNING
+    assert collapsed_status_css_class(sessions) == "status-dot status-running"
+
+
+def test_window_width_for_detail_state_doubles_expanded_width() -> None:
+    assert window_width_for_state(expanded=False, has_expanded_session=True) == 220
+    assert window_width_for_state(expanded=True, has_expanded_session=False) == 720
+    assert window_width_for_state(expanded=True, has_expanded_session=True) == 1440
+
+
+def test_arrow_keys_map_to_selection_delta() -> None:
+    assert navigation_delta_for_key(Gdk.KEY_Down) == 1
+    assert navigation_delta_for_key(Gdk.KEY_Up) == -1
+    assert navigation_delta_for_key(ord("a")) is None
+
+
+def test_enter_keys_activate_selected_session() -> None:
+    assert should_activate_selected_for_key(Gdk.KEY_Return) is True
+    assert should_activate_selected_for_key(Gdk.KEY_KP_Enter) is True
+    assert should_activate_selected_for_key(ord("a")) is False
+
+
+def test_escape_key_collapses_one_layer() -> None:
+    assert should_collapse_layer_for_key(Gdk.KEY_Escape) is True
+    assert should_collapse_layer_for_key(Gdk.KEY_space) is False
+
+
+def test_shift_state_controls_jump_shortcut() -> None:
+    assert key_state_has_shift(Gdk.ModifierType.SHIFT_MASK) is True
+    assert key_state_has_shift(Gdk.ModifierType.CONTROL_MASK) is False
+
+
+def test_moved_selection_key_clamps_and_initializes_selection() -> None:
+    keys = [("codex", "one"), ("codex", "two"), ("codex", "three")]
+
+    assert moved_selection_key(None, keys, 1) == ("codex", "one")
+    assert moved_selection_key(None, keys, -1) == ("codex", "three")
+    assert moved_selection_key(("codex", "one"), keys, 1) == ("codex", "two")
+    assert moved_selection_key(("codex", "three"), keys, 1) == ("codex", "three")
+    assert moved_selection_key(("codex", "one"), keys, -1) == ("codex", "one")
+    assert moved_selection_key(("codex", "missing"), keys, 1) == ("codex", "one")
+    assert moved_selection_key(("codex", "one"), [], 1) is None
+
+
+def test_compute_expanded_window_height_grows_for_expanded_session() -> None:
+    assert compute_expanded_window_height(session_count=1, has_expanded_session=True) == 1240
+
+
+def test_format_running_session_minutes_uses_started_at() -> None:
+    session = AgentSession(
+        provider="codex",
+        session_id="run",
+        cwd="/tmp/run",
+        title="Run",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=10,
+        started_at=100,
+        is_process_alive=True,
+    )
+
+    assert format_session_minutes(session, now_ts=220) == "2m"

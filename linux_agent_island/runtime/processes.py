@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 PROVIDER_COMMANDS = {
     "codex": {"codex"},
     "claude": {"claude", "claude-code"},
+    "gemini": {"gemini"},
 }
 
 
@@ -180,6 +181,18 @@ def is_guake_process(info: ProcessInfo) -> bool:
     return info.command == "guake" or args.endswith("/usr/bin/guake") or "/usr/bin/guake " in args
 
 
+def process_provider(info: ProcessInfo) -> str | None:
+    provider = next(
+        (name for name, commands in PROVIDER_COMMANDS.items() if info.command in commands),
+        None,
+    )
+    if provider is not None:
+        return provider
+    if info.command == "node" and "/gemini" in info.args and "@google/gemini-cli" in info.args:
+        return "gemini"
+    return None
+
+
 class SessionProcessInspector:
     def is_terminal_process(self, info: ProcessInfo) -> bool:
         return info.command in TERMINAL_NAMES or is_guake_process(info)
@@ -317,10 +330,7 @@ class SessionProcessInspector:
     ) -> list[AgentProcessInfo]:
         agent_processes: list[AgentProcessInfo] = []
         for info in tree.values():
-            provider = next(
-                (name for name, commands in PROVIDER_COMMANDS.items() if info.command in commands),
-                None,
-            )
+            provider = process_provider(info)
             if provider is None:
                 continue
             agent_processes.append(
