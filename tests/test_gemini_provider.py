@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from linux_agent_island.providers.gemini import GeminiProvider
@@ -199,3 +200,63 @@ def test_gemini_provider_loads_transcript_from_chat_file(tmp_path: Path) -> None
         {"role": "user", "text": "hello", "timestamp": "2026-04-10T01:02:00Z"},
         {"role": "assistant", "text": "hi", "timestamp": "2026-04-10T01:02:01Z"},
     ]
+
+
+def test_gemini_provider_loads_sessions_from_tmp_dir(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    projects_path = tmp_path / "projects.json"
+    tmp_dir = tmp_path / "tmp"
+
+    projects_path.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "/home/user/project1": "nickname1",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    chat_dir = tmp_dir / "nickname1" / "chats"
+    chat_dir.mkdir(parents=True)
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    (chat_dir / "session-2026-04-10T01-02-abcd1234.json").write_text(
+        json.dumps(
+            {
+                "sessionId": "abcd1234",
+                "projectHash": "nickname1",
+                "startTime": now_iso,
+                "lastUpdated": now_iso,
+                "messages": [
+                    {
+                        "type": "user",
+                        "content": "hello",
+                    },
+                    {
+                        "type": "gemini",
+                        "model": "gemini-2.5-pro",
+                        "content": "hi",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider = GeminiProvider(
+        settings_path=settings_path,
+        tmp_dir=tmp_dir,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+    )
+
+    sessions = provider.load_sessions()
+    assert len(sessions) == 1
+    session = sessions[0]
+    assert session.session_id == "abcd1234"
+    assert session.cwd == "/home/user/project1"
+    assert session.title == "hello"
+    assert session.provider == "gemini"
+    assert session.model == "gemini-2.5-pro"
+    assert session.is_hook_managed is True
+    assert session.is_process_alive is True

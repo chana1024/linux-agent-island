@@ -4,16 +4,12 @@ import logging
 import subprocess
 from dataclasses import dataclass, replace
 
+from ..core.config import AppConfig
 from ..core.models import AgentSession
+from ..providers import get_all_providers
 
 
 logger = logging.getLogger(__name__)
-
-PROVIDER_COMMANDS = {
-    "codex": {"codex"},
-    "claude": {"claude", "claude-code"},
-    "gemini": {"gemini"},
-}
 
 
 TERMINAL_NAMES = {
@@ -182,14 +178,14 @@ def is_guake_process(info: ProcessInfo) -> bool:
 
 
 def process_provider(info: ProcessInfo) -> str | None:
-    provider = next(
-        (name for name, commands in PROVIDER_COMMANDS.items() if info.command in commands),
-        None,
-    )
-    if provider is not None:
-        return provider
-    if info.command == "node" and "/gemini" in info.args and "@google/gemini-cli" in info.args:
-        return "gemini"
+    config = AppConfig.default()
+    for provider in get_all_providers(config):
+        sigs = provider.get_process_signatures()
+        if info.command in sigs.get("commands", []):
+            return provider.name
+        for pattern in sigs.get("arg_patterns", []):
+            if pattern in info.args:
+                return provider.name
     return None
 
 
@@ -361,14 +357,14 @@ class SessionProcessInspector:
                 if process.pid not in claimed
                 and (process.tty == session.tty.removeprefix("/dev/") or process.tty == session.tty)
             ]
-            if len(tty_matches) == 1:
+            if tty_matches:
                 return tty_matches[0]
         if session.cwd:
             cwd_matches = [
                 process for process in provider_processes
                 if process.pid not in claimed and process.cwd == session.cwd
             ]
-            if len(cwd_matches) == 1:
+            if cwd_matches:
                 return cwd_matches[0]
         return None
 
@@ -470,7 +466,28 @@ class SessionProcessInspector:
         if not candidates:
             return None
         matching_candidates = [candidate for candidate in candidates if candidate.session_matches_target]
-        base_candidates = matching_candidates or candidates
+        base_candidates = matching_candidates
+        if not base_candidates:
+            prioritized_groups = [
+                [
+                    candidate
+                    for candidate in candidates
+                    if candidate.window is not None and candidate.client.is_focused
+                ],
+                [
+                    candidate
+                    for candidate in candidates
+                    if candidate.window is not None and candidate.client.is_attached
+                ],
+                [candidate for candidate in candidates if candidate.client.is_focused],
+                [candidate for candidate in candidates if candidate.client.is_attached],
+                [candidate for candidate in candidates if candidate.window is not None],
+                candidates,
+            ]
+            for group in prioritized_groups:
+                if len(group) == 1:
+                    return group[0].client
+            return None
         windowed_candidates = [candidate for candidate in base_candidates if candidate.window is not None]
         preferred_candidates = windowed_candidates or base_candidates
         focused_client = next(
@@ -575,7 +592,11 @@ class SessionProcessInspector:
         alive_session_keys: set[tuple[str, str]] = set()
         claimed_pids: set[int] = set()
 
-        for session in sorted(sessions, key=lambda item: item.updated_at, reverse=True):
+        for session in sorted(
+            sessions,
+            key=lambda item: (item.identity_confirmed_by_hook, item.updated_at),
+            reverse=True,
+        ):
             match = self.match_session_process(session, processes, claimed_pids)
             if match is not None:
                 alive_session_keys.add((session.provider, session.session_id))

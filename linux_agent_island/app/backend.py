@@ -15,10 +15,11 @@ from gi.repository import Gio, GLib
 from ..core.config import AppConfig
 from ..core.logging import configure_logging
 from ..core.store import SessionStore
-from ..providers import ClaudeProvider, CodexProvider, GeminiProvider
+from ..providers import get_all_providers, get_provider
 from ..runtime.agent_events import AgentEvent
 from ..runtime.events import EventSocketServer
 from ..runtime.processes import SessionProcessInspector
+from ..runtime.restore import filter_cached_sessions_for_restore
 from ..runtime.session_cache import SessionCache
 
 
@@ -57,26 +58,6 @@ class BackendService:
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or AppConfig.default()
         self.store = SessionStore()
-        self.claude = ClaudeProvider(
-            settings_path=self.config.claude_settings_path,
-            hook_command_prefix=self.config.hook_command_prefix,
-            socket_path=self.config.event_socket_path,
-            legacy_hook_script_paths=(self.config.claude_hook_script_path,),
-        )
-        self.codex = CodexProvider(
-            state_db_path=self.config.codex_state_db_path,
-            history_path=self.config.codex_history_path,
-            hooks_config_path=self.config.codex_hooks_path,
-            hook_command_prefix=self.config.hook_command_prefix,
-            hook_script_path=self.config.codex_hook_script_path,
-            hook_script_source_path=self.config.codex_hook_script_source_path,
-            managed_hook_script_paths=(self.config.codex_hook_script_source_path,),
-        )
-        self.gemini = GeminiProvider(
-            settings_path=self.config.gemini_settings_path,
-            tmp_dir=self.config.gemini_tmp_dir,
-            hook_command_prefix=self.config.hook_command_prefix,
-        )
         self.session_cache = SessionCache(self.config.session_cache_path)
         self.process_inspector = SessionProcessInspector()
         self.socket_server = EventSocketServer(self.config.event_socket_path, self._on_runtime_event)
@@ -119,28 +100,55 @@ class BackendService:
         self.stop()
 
     def _install_hooks(self) -> None:
-        self.claude.install_hooks()
-        self.codex.install_hooks()
-        self.gemini.install_hooks()
+        for provider in get_all_providers(self.config):
+            provider.install_hooks()
 
     def _reload_provider_state(self) -> None:
         cached_sessions = self.session_cache.load()
-        cached_codex_sessions = [
-            session for session in cached_sessions
-            if session.provider == "codex"
-        ]
-        cached_non_codex_sessions = [
-            session for session in cached_sessions
-            if session.provider != "codex"
-        ]
-        self.store.restore_sessions(cached_non_codex_sessions)
-        self.store.restore_sessions(self.codex.filter_cached_sessions(cached_codex_sessions))
-        sessions = self.codex.load_sessions()
-        self.store.restore_sessions(sessions)
+        providers = get_all_providers(self.config)
+
+        self.store.restore_sessions(filter_cached_sessions_for_restore(cached_sessions, providers))
+
+        for provider in providers:
+            live_sessions = provider.load_sessions()
+            if live_sessions:
+                self.store.restore_sessions(live_sessions)
+
         self._persist_sessions()
 
     def _on_runtime_event(self, payload: dict[str, object]) -> None:
-        self.store.apply(AgentEvent.from_payload(payload))
+        event = AgentEvent.from_payload(payload)
+        previous = self.store.get(event.provider, event.session_id)
+        logger.info(
+            (
+                "runtime event received provider=%s session_id=%s event_type=%s "
+                "phase=%s updated_at=%s pid=%s tty=%s is_session_end=%s previous_phase=%s"
+            ),
+            event.provider,
+            event.session_id,
+            event.type.value,
+            None if event.phase is None else event.phase.value,
+            event.updated_at,
+            event.pid,
+            event.tty,
+            event.is_session_end,
+            None if previous is None else previous.phase.value,
+        )
+        session = self.store.apply(event)
+        if event.is_hook_managed and (event.pid is not None or event.tty is not None):
+            self.store.reassign_runtime_identity(
+                session.provider,
+                session.session_id,
+                session.pid,
+                session.tty,
+            )
+        logger.info(
+            "runtime event applied provider=%s session_id=%s current_phase=%s completed_at=%s",
+            session.provider,
+            session.session_id,
+            session.phase.value,
+            session.completed_at,
+        )
         self._persist_sessions()
         self._emit_sessions_changed()
 
@@ -223,15 +231,17 @@ class BackendService:
         sessions = self.process_inspector.annotate_sessions(sessions)
         return json.dumps([session.to_dict() for session in sessions])
 
-    def _serialize_session_transcript(self, provider: str, session_id: str) -> str:
-        session = self.store.get(provider, session_id)
-        if provider == "codex":
-            return json.dumps(self.codex.load_transcript(session_id))
-        if provider == "claude":
-            return json.dumps(self.claude.load_transcript(session_id, session.cwd if session else ""))
-        if provider == "gemini":
-            return json.dumps(self.gemini.load_transcript(session_id))
-        return "[]"
+    def _serialize_session_transcript(self, provider_name: str, session_id: str) -> str:
+        session = self.store.get(provider_name, session_id)
+        provider = get_provider(provider_name, self.config)
+        if not provider:
+            return "[]"
+
+        kwargs = {}
+        if provider_name == "claude" and session:
+            kwargs["cwd"] = session.cwd
+
+        return json.dumps(provider.load_transcript(session_id, **kwargs))
 
     def _reconcile_sessions(self) -> bool:
         sessions = self.store.list_sessions()

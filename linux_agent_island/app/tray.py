@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 
 
 def _run_application_action(config: AppConfig, action_name: str) -> None:
+    # GApplication path is usually the application ID with dots replaced by slashes
+    obj_path = "/" + config.frontend_application_id.replace(".", "/")
+    
+    # Try direct D-Bus call first
+    result = subprocess.run(
+        [
+            "gdbus", "call", "--session",
+            "--dest", config.frontend_application_id,
+            "--object-path", obj_path,
+            "--method", "org.gtk.Actions.Activate",
+            action_name, "[]", "{}"
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+
+    # Fallback to gapplication
     subprocess.run(
         ["gapplication", "action", config.frontend_application_id, action_name],
         capture_output=True,

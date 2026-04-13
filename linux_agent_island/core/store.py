@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import replace
 from typing import Iterable
 
 from .models import AgentSession, SessionOrigin, SessionPhase
 from ..runtime.agent_events import AgentEvent, AgentEventType
+
+
+logger = logging.getLogger(__name__)
 
 
 class SessionStore:
@@ -43,6 +47,7 @@ class SessionStore:
                     tty=session.tty,
                     last_message_preview=session.last_message_preview,
                     is_hook_managed=session.is_hook_managed,
+                    identity_confirmed_by_hook=session.identity_confirmed_by_hook,
                     is_session_end=session.is_session_ended,
                     is_process_alive=session.is_process_alive,
                     process_not_seen_count=session.process_not_seen_count,
@@ -74,6 +79,7 @@ class SessionStore:
             current = self._sessions.get(key)
             session = self._apply_locked(current, event)
             self._sessions[key] = session
+            self._log_transition(current, event, session)
             return session
 
     def reconcile_process_matches(self, sessions: Iterable[AgentSession]) -> bool:
@@ -86,6 +92,40 @@ class SessionStore:
                     continue
                 self._sessions[key] = session
                 changed = True
+        return changed
+
+    def reassign_runtime_identity(
+        self,
+        provider: str,
+        session_id: str,
+        pid: int | None,
+        tty: str | None,
+    ) -> bool:
+        changed = False
+        with self._lock:
+            for key, session in list(self._sessions.items()):
+                if session.provider != provider:
+                    continue
+                if session.session_id == session_id:
+                    if not session.identity_confirmed_by_hook:
+                        self._sessions[key] = replace(session, identity_confirmed_by_hook=True)
+                        changed = True
+                    continue
+
+                same_pid = pid is not None and session.pid == pid
+                same_tty = tty is not None and session.tty == tty
+                if not same_pid and not same_tty:
+                    continue
+
+                updated = replace(
+                    session,
+                    pid=None if same_pid else session.pid,
+                    tty=None if same_tty else session.tty,
+                    identity_confirmed_by_hook=False,
+                )
+                if updated != session:
+                    self._sessions[key] = updated
+                    changed = True
         return changed
 
     def mark_process_liveness(self, alive_session_keys: set[tuple[str, str]]) -> bool:
@@ -151,8 +191,13 @@ class SessionStore:
                 tty=event.tty if event.tty is not None else (current.tty if current else None),
                 has_interactive_window=current.has_interactive_window if current else False,
                 is_focused=current.is_focused if current else False,
-                is_hook_managed=False,
-                is_session_ended=False,
+                is_hook_managed=event.is_hook_managed if event.is_hook_managed else (current.is_hook_managed if current else False),
+                identity_confirmed_by_hook=(
+                    event.identity_confirmed_by_hook
+                    if event.identity_confirmed_by_hook
+                    else (current.identity_confirmed_by_hook if current else False)
+                ),
+                is_session_ended=event.is_session_end if event.is_session_end else (current.is_session_ended if current else False),
                 is_process_alive=event.is_process_alive or (current.is_process_alive if current else False),
                 process_not_seen_count=(
                     event.process_not_seen_count
@@ -179,12 +224,19 @@ class SessionStore:
             pid=event.pid,
             tty=event.tty,
             is_hook_managed=event.is_hook_managed,
+            identity_confirmed_by_hook=event.identity_confirmed_by_hook,
             is_process_alive=True,
             process_not_seen_count=0,
             last_message_preview=event.last_message_preview,
         )
 
         phase = event.phase if event.phase is not None else base.phase
+        if (
+            base.phase is SessionPhase.COMPLETED
+            and event.type is AgentEventType.ACTIVITY_UPDATED
+            and phase is not SessionPhase.COMPLETED
+        ):
+            phase = base.phase
         summary = event.summary or base.summary
         if not summary and event.last_message_preview:
             summary = event.last_message_preview
@@ -192,6 +244,11 @@ class SessionStore:
         is_session_ended = base.is_session_ended or event.is_session_end
         if event.type is AgentEventType.SESSION_STARTED:
             is_session_ended = False
+        identity_confirmed_by_hook = (
+            event.identity_confirmed_by_hook
+            or base.identity_confirmed_by_hook
+            or (event.is_hook_managed and (event.pid is not None or event.tty is not None))
+        )
 
         return replace(
             base,
@@ -221,8 +278,55 @@ class SessionStore:
             pid=event.pid if event.pid is not None else base.pid,
             tty=event.tty if event.tty is not None else base.tty,
             is_hook_managed=base.is_hook_managed or event.is_hook_managed,
+            identity_confirmed_by_hook=identity_confirmed_by_hook,
             is_session_ended=is_session_ended,
             is_process_alive=True,
             process_not_seen_count=0,
             last_message_preview=event.last_message_preview or base.last_message_preview,
+        )
+
+    def _log_transition(
+        self,
+        previous: AgentSession | None,
+        event: AgentEvent,
+        current: AgentSession,
+    ) -> None:
+        previous_phase = previous.phase.value if previous is not None else None
+        current_phase = current.phase.value
+        event_phase = event.phase.value if event.phase is not None else None
+
+        suspicious_regression = (
+            previous is not None
+            and previous.phase is SessionPhase.COMPLETED
+            and current.phase is not SessionPhase.COMPLETED
+        )
+        phase_changed = previous_phase != current_phase
+        suspicious_event = (
+            previous is not None
+            and previous.phase is SessionPhase.COMPLETED
+            and event.type is AgentEventType.ACTIVITY_UPDATED
+            and event_phase not in {None, SessionPhase.COMPLETED.value}
+        )
+
+        if not (phase_changed or suspicious_regression or suspicious_event):
+            return
+
+        level = logging.WARNING if suspicious_regression else logging.INFO
+        logger.log(
+            level,
+            (
+                "session transition provider=%s session_id=%s event_type=%s "
+                "event_phase=%s previous_phase=%s current_phase=%s updated_at=%s "
+                "pid=%s tty=%s is_session_end=%s"
+            ),
+            event.provider,
+            event.session_id,
+            event.type.value,
+            event_phase,
+            previous_phase,
+            current_phase,
+            event.updated_at,
+            current.pid,
+            current.tty,
+            event.is_session_end,
         )

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import shlex
-import time
 from pathlib import Path
 from typing import Any
 
-from ..core.models import AgentSession, SessionPhase
+from ..core.models import AgentSession, SessionOrigin, SessionPhase
+from .base import BaseProvider
+from .utils import (
+    current_timestamp,
+    extract_prompt_title,
+    fallback_session_title,
+)
 
 
 HOOK_EVENTS = (
@@ -50,7 +56,7 @@ def _looks_like_managed_module_command(command: object, provider: str, event_nam
     return False
 
 
-class ClaudeProvider:
+class ClaudeProvider(BaseProvider):
     def __init__(
         self,
         settings_path: Path,
@@ -58,12 +64,18 @@ class ClaudeProvider:
         socket_path: Path,
         legacy_hook_script_paths: tuple[Path, ...] = (),
         projects_dir: Path | None = None,
+        recent_window_seconds: int = 86_400,
     ) -> None:
         self.settings_path = settings_path
         self.hook_command_prefix = hook_command_prefix
         self.socket_path = socket_path
         self.legacy_hook_script_paths = legacy_hook_script_paths
         self.projects_dir = projects_dir or Path.home() / ".claude" / "projects"
+        self.recent_window_seconds = recent_window_seconds
+
+    @property
+    def name(self) -> str:
+        return "claude"
 
     def install_hooks(self) -> None:
         payload = self._load_settings()
@@ -86,6 +98,67 @@ class ClaudeProvider:
             else:
                 del hooks[event]
         self._write_settings(payload)
+
+    def load_sessions(self) -> list[AgentSession]:
+        if not self.projects_dir.exists():
+            return []
+
+        now_ts = current_timestamp()
+        sessions: list[AgentSession] = []
+
+        # Claude projects are typically directories like: ~/.claude/projects/home-user-project/
+        # Each contains session files like <session_id>.jsonl
+        for session_file in self.projects_dir.glob("*/*.jsonl"):
+            try:
+                # Read last line to get most recent state
+                lines = session_file.read_text(encoding="utf-8").strip().splitlines()
+                if not lines:
+                    continue
+                last_event = json.loads(lines[-1])
+            except (OSError, json.JSONDecodeError, IndexError):
+                continue
+
+            session_id = session_file.stem
+            updated_at = _session_timestamp_to_seconds(last_event.get("timestamp"), now_ts)
+
+            if updated_at < now_ts - self.recent_window_seconds:
+                continue
+
+            # Project dir name is a slug of the path, e.g., home-user-project
+            # We can't perfectly recover CWD from it, but the last_event usually has it
+            cwd = str(last_event.get("cwd", ""))
+            
+            # Find first user message for title
+            title = session_id[:8]
+            for line in lines:
+                try:
+                    ev = json.loads(line)
+                    if ev.get("type") == "user":
+                        msg = ev.get("message", {})
+                        if isinstance(msg, dict):
+                            title = _content_to_text(msg.get("content"))[:50].strip() or title
+                            break
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+            sessions.append(
+                AgentSession(
+                    provider=self.name,
+                    session_id=session_id,
+                    cwd=cwd,
+                    title=title,
+                    phase=self._map_phase(str(last_event.get("status", "idle"))),
+                    model=str(last_event.get("model")) if last_event.get("model") else None,
+                    sandbox=str(last_event.get("sandbox")) if last_event.get("sandbox") else None,
+                    approval_mode=str(last_event.get("approval_mode")) if last_event.get("approval_mode") else None,
+                    updated_at=updated_at,
+                    origin=SessionOrigin.RESTORED,
+                    is_hook_managed=True,
+                    is_process_alive=True, # Initially assume alive for matching
+                )
+            )
+
+        return sessions
 
     def _load_settings(self) -> dict[str, object]:
         if self.settings_path.exists():
@@ -110,8 +183,7 @@ class ClaudeProvider:
         return commands
 
     def _merge_hook_entries(self, existing: object, event_name: str) -> list[object]:
-        entries = list(existing) if isinstance(existing, list) else []
-        entries = self._prune_managed_hook_entries(entries, event_name)
+        entries = self._prune_managed_hook_entries(existing, event_name)
         new_entry = {
             "matcher": "*" if event_name not in {"Stop", "SessionStart", "SessionEnd"} else None,
             "hooks": [
@@ -164,7 +236,7 @@ class ClaudeProvider:
                 pruned_entries.append(updated_entry)
         return pruned_entries
 
-    def load_transcript(self, session_id: str, cwd: str = "") -> list[dict[str, str]]:
+    def load_transcript(self, session_id: str, cwd: str = "", **kwargs: Any) -> list[dict[str, str]]:
         transcript_path = self._transcript_path(session_id, cwd)
         if transcript_path is None or not transcript_path.exists():
             return []
@@ -212,6 +284,72 @@ class ClaudeProvider:
             "timestamp": str(payload.get("timestamp", "")),
         }
 
+    def get_process_signatures(self) -> dict[str, list[str]]:
+        return {
+            "commands": ["claude", "claude-code"],
+            "arg_patterns": [],
+        }
+
+    def build_event(
+        self,
+        hook_name: str,
+        payload: dict[str, Any],
+        pid: int | None = None,
+        tty: str | None = None,
+    ) -> dict[str, Any]:
+        now_ts = current_timestamp()
+        status = payload.get("status")
+        if not status:
+            mapping = {
+                "UserPromptSubmit": "processing",
+                "PreToolUse": "processing",
+                "PostToolUse": "processing",
+                "PermissionRequest": "waiting_for_approval",
+                "Notification": "waiting_for_input",
+                "Stop": "waiting_for_input",
+                "SessionStart": "waiting_for_input",
+                "SessionEnd": "ended",
+                "PreCompact": "processing",
+            }
+            status = mapping.get(hook_name, "idle")
+        phase_map = {
+            "processing": "running",
+            "running_tool": "running",
+            "waiting_for_approval": "waiting_approval",
+            "waiting_for_input": "waiting",
+            "ended": "completed",
+            "notification": "waiting",
+        }
+        event_type = "activity_updated"
+        title = ""
+        if hook_name == "SessionStart":
+            event_type = "session_started"
+            title = fallback_session_title(payload)
+        elif hook_name == "SessionEnd":
+            event_type = "session_completed"
+        elif hook_name == "Stop":
+            event_type = "session_completed"
+        elif hook_name == "UserPromptSubmit":
+            title = extract_prompt_title(payload)
+        return {
+            "event_type": event_type,
+            "provider": self.name,
+            "session_id": payload.get("session_id", "unknown"),
+            "cwd": payload.get("cwd", ""),
+            "title": title,
+            "phase": phase_map.get(str(status), "idle"),
+            "model": payload.get("model"),
+            "updated_at": now_ts,
+            "started_at": now_ts if hook_name == "UserPromptSubmit" else None,
+            "origin": "live",
+            "is_hook_managed": True,
+            "pid": pid if pid is not None else payload.get("pid"),
+            "tty": tty if tty is not None else payload.get("tty"),
+            "is_session_end": hook_name == "SessionEnd",
+            "summary": payload.get("message", ""),
+            "last_message_preview": payload.get("message", ""),
+        }
+
     def session_from_event(self, payload: dict[str, object]) -> AgentSession:
         cwd = str(payload.get("cwd", ""))
         title = Path(cwd).name or str(payload.get("session_id", ""))
@@ -224,7 +362,8 @@ class ClaudeProvider:
             model=str(payload["model"]) if payload.get("model") is not None else None,
             sandbox=str(payload["sandbox"]) if payload.get("sandbox") is not None else None,
             approval_mode=str(payload["approval_mode"]) if payload.get("approval_mode") is not None else None,
-            updated_at=int(payload.get("updated_at", time.time())),
+            updated_at=int(payload.get("updated_at", current_timestamp())),
+            is_hook_managed=True,
             last_message_preview=str(payload.get("last_message_preview", "")),
         )
 
@@ -269,3 +408,24 @@ def _content_to_text(content: object) -> str:
         if text:
             parts.append(text)
     return "\n".join(parts).strip()
+
+
+def _session_timestamp_to_seconds(timestamp: object, fallback: int) -> int:
+    if timestamp is None:
+        return fallback
+    if isinstance(timestamp, (int, float)):
+        return int(timestamp / 1000) if timestamp > 10_000_000_000 else int(timestamp)
+    if isinstance(timestamp, str):
+        stripped = timestamp.strip()
+        if not stripped:
+            return fallback
+        try:
+            numeric = float(stripped)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+            except ValueError:
+                return fallback
+            return int(parsed.timestamp())
+        return int(numeric / 1000) if numeric > 10_000_000_000 else int(numeric)
+    return fallback
