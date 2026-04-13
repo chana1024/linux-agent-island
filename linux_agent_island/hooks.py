@@ -8,52 +8,20 @@ import time
 from pathlib import Path
 
 from .core.config import AppConfig
-from .providers.codex import CodexProvider
+from .providers import get_provider
+from .providers.utils import (
+    current_timestamp,
+    detect_tty_from_streams,
+    extract_prompt_title,
+    fallback_session_title,
+    get_process_metadata,
+    load_stdin_json,
+    normalize_tty,
+)
 from .runtime.events import emit_runtime_event
 
 
-def _load_stdin_json() -> dict[str, object]:
-    try:
-        return json.load(sys.stdin)
-    except json.JSONDecodeError:
-        return {}
-
-
-def _normalize_tty(tty: str | None) -> str | None:
-    if not tty:
-        return None
-    tty = tty.strip()
-    if not tty or tty in {"??", "-"}:
-        return None
-    if not tty.startswith("/dev/"):
-        tty = "/dev/" + tty
-    return tty
-
-
-def _detect_tty_from_streams() -> str | None:
-    for stream in (sys.stdin, sys.stdout, sys.stderr):
-        try:
-            return _normalize_tty(os.ttyname(stream.fileno()))
-        except (OSError, AttributeError):
-            continue
-    return None
-
-
-def _fallback_session_title(payload: dict[str, object]) -> str:
-    return Path(str(payload.get("cwd", ""))).name or str(payload.get("session_id", "unknown"))
-
-
-def _extract_prompt_title(payload: dict[str, object]) -> str:
-    for key in ("prompt", "text", "message", "input", "last_user_message"):
-        value = payload.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return ""
-
-
+# Compatibility wrappers for tests
 def _get_process_metadata() -> tuple[int, str | None]:
     parent_pid = os.getppid()
     try:
@@ -74,196 +42,86 @@ def _get_process_metadata() -> tuple[int, str | None]:
     return parent_pid, tty
 
 
+def _load_stdin_json() -> dict[str, object]:
+    return load_stdin_json()
+
+
+def _normalize_tty(tty: str | None) -> str | None:
+    return normalize_tty(tty)
+
+
+def _detect_tty_from_streams() -> str | None:
+    return detect_tty_from_streams()
+
+
+def _fallback_session_title(payload: dict[str, object]) -> str:
+    return fallback_session_title(payload)
+
+
+def _extract_prompt_title(payload: dict[str, object]) -> str:
+    return extract_prompt_title(payload)
+
+
 def _build_codex_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
-    parent_pid, tty = _get_process_metadata()
-    now_ts = int(time.time())
-    event_type = "activity_updated"
-    phase = "running"
-    title = ""
-    if hook_name == "Stop":
-        event_type = "session_completed"
-        phase = "completed"
-    elif hook_name == "SessionStart":
-        event_type = "session_started"
-        title = _fallback_session_title(payload)
-    elif hook_name == "UserPromptSubmit":
-        title = _extract_prompt_title(payload)
-    return {
-        "event_type": event_type,
-        "provider": "codex",
-        "session_id": payload.get("session_id", "unknown"),
-        "cwd": payload.get("cwd", ""),
-        "title": title,
-        "phase": phase,
-        "model": payload.get("model"),
-        "updated_at": now_ts,
-        "started_at": now_ts if hook_name == "UserPromptSubmit" else None,
-        "origin": "live",
-        "is_hook_managed": True,
-        "pid": parent_pid,
-        "tty": tty,
-        "summary": payload.get("last_assistant_message", ""),
-        "last_message_preview": payload.get("last_assistant_message", ""),
-    }
+    config = AppConfig.default()
+    provider = get_provider("codex", config)
+    pid, tty = _get_process_metadata()
+    return provider.build_event(hook_name, payload, pid=pid, tty=tty) if provider else {}
+
+
+def _build_gemini_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
+    config = AppConfig.default()
+    provider = get_provider("gemini", config)
+    pid, tty = _get_process_metadata()
+    return provider.build_event(hook_name, payload, pid=pid, tty=tty) if provider else {}
+
+
+def _build_claude_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
+    config = AppConfig.default()
+    provider = get_provider("claude", config)
+    return provider.build_event(hook_name, payload) if provider else {}
 
 
 def _is_codex_subagent_session(state_db_path: Path, session_id: str) -> bool:
+    from .providers.codex import CodexProvider
+    # Minimal provider for subagent check
     provider = CodexProvider(
         state_db_path=state_db_path,
         history_path=Path(),
         hooks_config_path=Path(),
-        hook_script_path=Path(),
     )
     return provider.is_subagent_session(session_id)
-
-
-
-def _extract_gemini_model(payload: dict[str, object]) -> str | None:
-    llm_request = payload.get("llm_request")
-    if isinstance(llm_request, dict) and llm_request.get("model") is not None:
-        return str(llm_request["model"])
-    return str(payload["model"]) if payload.get("model") is not None else None
-
-
-def _build_gemini_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
-    parent_pid, tty = _get_process_metadata()
-    now_ts = int(time.time())
-    event_type = "activity_updated"
-    phase = "waiting"
-    title = ""
-    summary = ""
-    last_message_preview = ""
-    is_session_end = False
-
-    if hook_name == "SessionStart":
-        event_type = "session_started"
-        title = _fallback_session_title(payload)
-    elif hook_name == "BeforeAgent":
-        phase = "running"
-        title = _extract_prompt_title(payload)
-        started_at = now_ts
-    elif hook_name == "AfterAgent":
-        event_type = "session_completed"
-        phase = "completed"
-        summary = str(payload.get("prompt_response", ""))
-        last_message_preview = summary
-        started_at = None
-    elif hook_name == "SessionEnd":
-        event_type = "session_completed"
-        phase = "completed"
-        is_session_end = True
-        started_at = None
-    elif hook_name == "Notification":
-        phase = "waiting_approval" if payload.get("notification_type") == "ToolPermission" else "waiting"
-        summary = str(payload.get("message", ""))
-        last_message_preview = summary
-        started_at = None
-    else:
-        started_at = None
-
-    if hook_name not in {"BeforeAgent", "AfterAgent", "SessionEnd", "Notification"}:
-        started_at = None
-
-    return {
-        "event_type": event_type,
-        "provider": "gemini",
-        "session_id": payload.get("session_id", "unknown"),
-        "cwd": payload.get("cwd", ""),
-        "title": title,
-        "phase": phase,
-        "model": _extract_gemini_model(payload),
-        "updated_at": now_ts,
-        "started_at": started_at,
-        "origin": "live",
-        "is_hook_managed": True,
-        "pid": parent_pid,
-        "tty": tty,
-        "is_session_end": is_session_end,
-        "summary": summary,
-        "last_message_preview": last_message_preview,
-    }
-
-def _build_claude_event(hook_name: str, payload: dict[str, object]) -> dict[str, object]:
-    now_ts = int(time.time())
-    status = payload.get("status")
-    if not status:
-        mapping = {
-            "UserPromptSubmit": "processing",
-            "PreToolUse": "processing",
-            "PostToolUse": "processing",
-            "PermissionRequest": "waiting_for_approval",
-            "Notification": "waiting_for_input",
-            "Stop": "waiting_for_input",
-            "SessionStart": "waiting_for_input",
-            "SessionEnd": "ended",
-            "PreCompact": "processing",
-        }
-        status = mapping.get(hook_name, "idle")
-    phase_map = {
-        "processing": "running",
-        "running_tool": "running",
-        "waiting_for_approval": "waiting_approval",
-        "waiting_for_input": "waiting",
-        "ended": "completed",
-        "notification": "waiting",
-    }
-    event_type = "activity_updated"
-    title = ""
-    if hook_name == "SessionStart":
-        event_type = "session_started"
-        title = _fallback_session_title(payload)
-    elif hook_name == "SessionEnd":
-        event_type = "session_completed"
-    elif hook_name == "Stop":
-        event_type = "session_completed"
-    elif hook_name == "UserPromptSubmit":
-        title = _extract_prompt_title(payload)
-    return {
-        "event_type": event_type,
-        "provider": "claude",
-        "session_id": payload.get("session_id", "unknown"),
-        "cwd": payload.get("cwd", ""),
-        "title": title,
-        "phase": phase_map.get(str(status), "idle"),
-        "model": payload.get("model"),
-        "updated_at": now_ts,
-        "started_at": now_ts if hook_name == "UserPromptSubmit" else None,
-        "origin": "live",
-        "is_hook_managed": True,
-        "pid": payload.get("pid"),
-        "tty": payload.get("tty"),
-        "is_session_end": hook_name == "SessionEnd",
-        "summary": payload.get("message", ""),
-        "last_message_preview": payload.get("message", ""),
-    }
 
 
 def main() -> int:
     if len(sys.argv) < 3:
         return 1
-    provider = sys.argv[1]
+    provider_name = sys.argv[1]
     hook_name = sys.argv[2]
     payload = _load_stdin_json()
     config = AppConfig.default()
-    if provider == "codex":
+
+    provider = get_provider(provider_name, config)
+    if not provider:
+        return 1
+
+    # Codex specific subagent check
+    if provider_name == "codex":
         session_id = str(payload.get("session_id", ""))
         if _is_codex_subagent_session(config.codex_state_db_path, session_id):
             if hook_name == "Stop":
                 print(json.dumps({"continue": True}))
             return 0
-        event = _build_codex_event(hook_name, payload)
-        emit_runtime_event(config.event_socket_path, event)
-        if hook_name == "Stop":
-            print(json.dumps({"continue": True}))
-    elif provider == "claude":
-        event = _build_claude_event(hook_name, payload)
-        emit_runtime_event(config.event_socket_path, event)
-    elif provider == "gemini":
-        event = _build_gemini_event(hook_name, payload)
-        emit_runtime_event(config.event_socket_path, event)
+
+    event = provider.build_event(hook_name, payload)
+    emit_runtime_event(config.event_socket_path, event)
+
+    # Provider specific responses
+    if provider_name == "codex" and hook_name == "Stop":
+        print(json.dumps({"continue": True}))
+    elif provider_name == "gemini":
         print(json.dumps({"suppressOutput": True}))
-    else:
-        return 1
+
     return 0
 
 

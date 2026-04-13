@@ -39,6 +39,7 @@ class AgentSession:
     has_interactive_window: bool = False
     is_focused: bool = False
     is_hook_managed: bool = False
+    identity_confirmed_by_hook: bool = False
     is_session_ended: bool = False
     is_process_alive: bool = False
     process_not_seen_count: int = 0
@@ -85,6 +86,7 @@ class AgentSession:
             has_interactive_window=bool(payload.get("has_interactive_window", False)),
             is_focused=bool(payload.get("is_focused", False)),
             is_hook_managed=bool(payload.get("is_hook_managed", False)),
+            identity_confirmed_by_hook=bool(payload.get("identity_confirmed_by_hook", False)),
             is_session_ended=bool(payload.get("is_session_ended", False)),
             is_process_alive=bool(payload.get("is_process_alive", False)),
             process_not_seen_count=int(payload.get("process_not_seen_count", 0)),

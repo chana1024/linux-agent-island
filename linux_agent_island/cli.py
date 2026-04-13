@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .core.config import AppConfig, load_frontend_settings
 from .core.logging import configure_logging
-from .providers import ClaudeProvider, CodexProvider, GeminiProvider
+from .providers import get_all_providers
 
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,27 @@ def _start_service(config: AppConfig) -> int:
 
 
 def _run_application_action(config: AppConfig, action_name: str) -> int:
+    # GApplication path is usually the application ID with dots replaced by slashes
+    obj_path = "/" + config.frontend_application_id.replace(".", "/")
+    
     for _attempt in range(20):
+        # Try direct D-Bus call first (more robust for already running processes)
+        result = subprocess.run(
+            [
+                "gdbus", "call", "--session",
+                "--dest", config.frontend_application_id,
+                "--object-path", obj_path,
+                "--method", "org.gtk.Actions.Activate",
+                action_name, "[]", "{}"
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return 0
+            
+        # Fallback to gapplication
         result = subprocess.run(
             ["gapplication", "action", config.frontend_application_id, action_name],
             capture_output=True,
@@ -56,55 +76,13 @@ def _run_application_action(config: AppConfig, action_name: str) -> int:
 
 
 def _install_hooks(config: AppConfig) -> None:
-    claude = ClaudeProvider(
-        settings_path=config.claude_settings_path,
-        hook_command_prefix=config.hook_command_prefix,
-        socket_path=config.event_socket_path,
-        legacy_hook_script_paths=(config.claude_hook_script_path,),
-    )
-    codex = CodexProvider(
-        state_db_path=config.codex_state_db_path,
-        history_path=config.codex_history_path,
-        hooks_config_path=config.codex_hooks_path,
-        hook_command_prefix=config.hook_command_prefix,
-        hook_script_path=config.codex_hook_script_path,
-        hook_script_source_path=config.codex_hook_script_source_path,
-        managed_hook_script_paths=(config.codex_hook_script_source_path,),
-    )
-    gemini = GeminiProvider(
-        settings_path=config.gemini_settings_path,
-        tmp_dir=config.gemini_tmp_dir,
-        hook_command_prefix=config.hook_command_prefix,
-    )
-    claude.install_hooks()
-    codex.install_hooks()
-    gemini.install_hooks()
+    for provider in get_all_providers(config):
+        provider.install_hooks()
 
 
 def _uninstall_hooks(config: AppConfig) -> None:
-    claude = ClaudeProvider(
-        settings_path=config.claude_settings_path,
-        hook_command_prefix=config.hook_command_prefix,
-        socket_path=config.event_socket_path,
-        legacy_hook_script_paths=(config.claude_hook_script_path,),
-    )
-    codex = CodexProvider(
-        state_db_path=config.codex_state_db_path,
-        history_path=config.codex_history_path,
-        hooks_config_path=config.codex_hooks_path,
-        hook_command_prefix=config.hook_command_prefix,
-        hook_script_path=config.codex_hook_script_path,
-        hook_script_source_path=config.codex_hook_script_source_path,
-        managed_hook_script_paths=(config.codex_hook_script_source_path,),
-    )
-    gemini = GeminiProvider(
-        settings_path=config.gemini_settings_path,
-        tmp_dir=config.gemini_tmp_dir,
-        hook_command_prefix=config.hook_command_prefix,
-    )
-    claude.uninstall_hooks()
-    codex.uninstall_hooks()
-    gemini.uninstall_hooks()
+    for provider in get_all_providers(config):
+        provider.uninstall_hooks()
 
 
 def daemon(args: argparse.Namespace) -> int:

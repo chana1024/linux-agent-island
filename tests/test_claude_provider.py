@@ -3,6 +3,7 @@ from pathlib import Path
 
 from linux_agent_island.core.models import SessionPhase
 from linux_agent_island.providers.claude import ClaudeProvider
+from linux_agent_island.providers.utils import current_timestamp
 
 
 def test_claude_provider_merges_hooks_into_settings(tmp_path: Path) -> None:
@@ -207,3 +208,91 @@ def test_claude_provider_loads_transcript_from_project_file(tmp_path: Path) -> N
         {"role": "user", "text": "hello", "timestamp": "2026-04-10T00:00:00Z"},
         {"role": "assistant", "text": "hi", "timestamp": "2026-04-10T00:00:01Z"},
     ]
+
+
+def test_claude_provider_loads_sessions(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    session_dir = projects_dir / "-tmp-workspace-demo"
+    session_dir.mkdir(parents=True)
+    
+    # ms timestamp
+    now_ms = int(current_timestamp() * 1000)
+    
+    (session_dir / "claude-1.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": now_ms - 1000,
+                        "message": {"role": "user", "content": "hello world"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "status": "waiting_for_input",
+                        "timestamp": now_ms,
+                        "cwd": "/tmp/workspace/demo",
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    
+    provider = ClaudeProvider(
+        settings_path=tmp_path / "settings.json",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+        projects_dir=projects_dir,
+    )
+
+    sessions = provider.load_sessions()
+    assert len(sessions) == 1
+    session = sessions[0]
+    assert session.session_id == "claude-1"
+    assert session.cwd == "/tmp/workspace/demo"
+    assert session.title == "hello world"
+    assert session.is_process_alive is True
+
+
+def test_claude_provider_loads_sessions_with_iso_timestamp(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    session_dir = projects_dir / "-tmp-workspace-demo"
+    session_dir.mkdir(parents=True)
+
+    (session_dir / "claude-iso.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": "2026-04-13T05:55:03Z",
+                        "message": {"role": "user", "content": "hello iso"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "status": "waiting_for_input",
+                        "timestamp": "2026-04-13T05:55:04Z",
+                        "cwd": "/tmp/workspace/demo",
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provider = ClaudeProvider(
+        settings_path=tmp_path / "settings.json",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+        projects_dir=projects_dir,
+        recent_window_seconds=10_000_000,
+    )
+
+    sessions = provider.load_sessions()
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "claude-iso"

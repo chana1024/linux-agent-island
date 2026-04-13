@@ -186,6 +186,102 @@ def test_find_tmux_client_falls_back_to_non_target_session_candidate() -> None:
     assert selected == candidates[0].client
 
 
+def test_find_tmux_client_does_not_pick_ambiguous_external_candidate() -> None:
+    inspector = SessionProcessInspector()
+    candidates = [
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=1,
+                session_id="$1",
+                client_tty="/dev/pts/1",
+                is_attached=True,
+                is_focused=False,
+            ),
+            window=WindowInfo(window_id="0x03e00007", desktop=0, pid=200, title="Guake 1"),
+            session_matches_target=False,
+        ),
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=2,
+                session_id="$2",
+                client_tty="/dev/pts/2",
+                is_attached=True,
+                is_focused=False,
+            ),
+            window=WindowInfo(window_id="0x03e00008", desktop=0, pid=201, title="Guake 2"),
+            session_matches_target=False,
+        ),
+    ]
+
+    selected = inspector.find_tmux_client(candidates)
+
+    assert selected is None
+
+
+def test_find_tmux_client_prefers_unique_focused_external_candidate() -> None:
+    inspector = SessionProcessInspector()
+    candidates = [
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=1,
+                session_id="$1",
+                client_tty="/dev/pts/1",
+                is_attached=True,
+                is_focused=True,
+            ),
+            window=WindowInfo(window_id="0x03e00007", desktop=0, pid=200, title="Guake 1"),
+            session_matches_target=False,
+        ),
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=2,
+                session_id="$2",
+                client_tty="/dev/pts/2",
+                is_attached=True,
+                is_focused=False,
+            ),
+            window=WindowInfo(window_id="0x03e00008", desktop=0, pid=201, title="Guake 2"),
+            session_matches_target=False,
+        ),
+    ]
+
+    selected = inspector.find_tmux_client(candidates)
+
+    assert selected == candidates[0].client
+
+
+def test_find_tmux_client_prefers_unique_windowed_attached_external_candidate() -> None:
+    inspector = SessionProcessInspector()
+    candidates = [
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=1,
+                session_id="$1",
+                client_tty="/dev/pts/1",
+                is_attached=True,
+                is_focused=False,
+            ),
+            window=WindowInfo(window_id="0x03e00007", desktop=0, pid=200, title="Guake 1"),
+            session_matches_target=False,
+        ),
+        TmuxClientCandidate(
+            client=TmuxClientInfo(
+                client_pid=2,
+                session_id="$2",
+                client_tty="/dev/pts/2",
+                is_attached=False,
+                is_focused=False,
+            ),
+            window=None,
+            session_matches_target=False,
+        ),
+    ]
+
+    selected = inspector.find_tmux_client(candidates)
+
+    assert selected == candidates[0].client
+
+
 def test_build_process_tree_does_not_log_commands_by_default(monkeypatch, caplog) -> None:
     inspector = SessionProcessInspector()
 
@@ -428,6 +524,62 @@ def test_reconcile_sessions_does_not_match_multiple_restored_sessions_to_one_cwd
     by_id = {session.session_id: session for session in reconciled}
     assert by_id["newer"].pid == 900
     assert by_id["older"].pid is None
+
+
+def test_reconcile_sessions_prioritizes_hook_confirmed_session_over_newer_restored_session() -> None:
+    inspector = SessionProcessInspector()
+    sessions = [
+        AgentSession(
+            provider="codex",
+            session_id="newer-restored",
+            cwd="/tmp/project",
+            title="Newer",
+            phase=SessionPhase.COMPLETED,
+            model=None,
+            sandbox=None,
+            approval_mode=None,
+            updated_at=20,
+            origin=SessionOrigin.RESTORED,
+            is_process_alive=True,
+        ),
+        AgentSession(
+            provider="codex",
+            session_id="hook-real",
+            cwd="/tmp/project",
+            title="Real",
+            phase=SessionPhase.RUNNING,
+            model=None,
+            sandbox=None,
+            approval_mode=None,
+            updated_at=10,
+            origin=SessionOrigin.RESTORED,
+            identity_confirmed_by_hook=True,
+            is_process_alive=True,
+        ),
+    ]
+    tree = {
+        900: ProcessInfo(pid=900, ppid=1, command="codex", tty="pts/7"),
+    }
+
+    original_list_agent_processes = inspector.list_agent_processes
+    inspector.list_agent_processes = lambda _tree: [  # type: ignore[method-assign]
+        AgentProcessInfo(provider="codex", pid=900, tty="pts/7", cwd="/tmp/project")
+    ]
+    try:
+        reconciled, alive_keys = inspector.reconcile_sessions(
+            sessions,
+            process_tree=tree,
+            visible_window_pids=set(),
+            active_window_pid=None,
+            tmux_panes=[],
+        )
+    finally:
+        inspector.list_agent_processes = original_list_agent_processes  # type: ignore[method-assign]
+
+    assert alive_keys == {("codex", "hook-real")}
+    by_id = {session.session_id: session for session in reconciled}
+    assert by_id["hook-real"].pid == 900
+    assert by_id["newer-restored"].pid is None
 
 
 def test_jump_to_session_activates_matching_terminal_window(monkeypatch) -> None:

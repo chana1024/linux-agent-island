@@ -1,4 +1,5 @@
 from linux_agent_island.frontend import (
+    FrontendApp,
     Gdk,
     HIGHLIGHT_DURATION_SECONDS,
     collapsed_status_css_class,
@@ -225,8 +226,8 @@ def test_session_metadata_tags_include_model_and_window_state() -> None:
         is_focused=True,
     )
 
-    assert session_metadata_tags(windowed) == ["Claude Code", "sonnet", "Window"]
-    assert session_metadata_tags(focused) == ["Codex", "Unknown model", "Focused"]
+    assert session_metadata_tags(windowed) == ["Claude Code", "sonnet"]
+    assert session_metadata_tags(focused) == ["Codex", "Unknown model"]
 
 
 def test_panel_sessions_prioritizes_attention_running_then_completed() -> None:
@@ -458,6 +459,21 @@ def test_enter_keys_activate_selected_session() -> None:
 def test_escape_key_collapses_one_layer() -> None:
     assert should_collapse_layer_for_key(Gdk.KEY_Escape) is True
     assert should_collapse_layer_for_key(Gdk.KEY_space) is False
+
+
+def test_collapse_one_layer_hides_island_when_panel_already_collapsed(monkeypatch) -> None:
+    app = FrontendApp()
+    app.expanded = False
+
+    hidden: list[bool] = []
+
+    def fake_hide(*_args: object) -> None:
+        hidden.append(True)
+
+    monkeypatch.setattr(app, "_action_hide_island", fake_hide)
+
+    assert app._collapse_one_layer() is True
+    assert hidden == [True]
 
 
 def test_shift_state_controls_jump_shortcut() -> None:

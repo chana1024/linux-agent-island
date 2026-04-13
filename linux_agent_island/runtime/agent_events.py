@@ -33,6 +33,7 @@ class AgentEvent:
     tty: str | None = None
     last_message_preview: str = ""
     is_hook_managed: bool = False
+    identity_confirmed_by_hook: bool = False
     is_session_end: bool = False
     is_process_alive: bool = False
     process_not_seen_count: int = 0
@@ -61,6 +62,7 @@ class AgentEvent:
             tty=str(payload["tty"]) if payload.get("tty") is not None else None,
             last_message_preview=str(payload.get("last_message_preview", "")),
             is_hook_managed=bool(payload.get("is_hook_managed", False)),
+            identity_confirmed_by_hook=bool(payload.get("identity_confirmed_by_hook", False)),
             is_session_end=bool(payload.get("is_session_end", False)),
             is_process_alive=bool(payload.get("is_process_alive", False)),
             process_not_seen_count=int(payload.get("process_not_seen_count", 0)),

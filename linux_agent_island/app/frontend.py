@@ -294,15 +294,10 @@ def session_provider_label(provider: str) -> str:
 
 
 def session_metadata_tags(session: AgentSession) -> list[str]:
-    tags = [
+    return [
         session_provider_label(session.provider),
         session.model or "Unknown model",
     ]
-    if session.is_focused:
-        tags.append("Focused")
-    elif session.has_interactive_window:
-        tags.append("Window")
-    return tags
 
 
 def detect_completed_sessions(
@@ -598,7 +593,16 @@ class FrontendApp(Gtk.Application):
 
     def _collapse_one_layer(self) -> bool:
         if not self.expanded:
-            return False
+            self._action_hide_island()
+            return True
+
+        if self.selected_session_key is None and self.expanded_session_ids:
+            self._collapse_all_session_details_with_animation()
+            return True
+
+        if self.selected_session_key is None:
+            self._collapse_panel_with_animation()
+            return True
 
         if self.selected_session_key in self.expanded_session_ids:
             self._collapse_session_details_with_animation(self.selected_session_key)

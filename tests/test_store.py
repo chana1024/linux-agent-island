@@ -251,3 +251,243 @@ def test_store_resets_started_at_from_user_prompt_activity() -> None:
     assert session is not None
     assert session.started_at == 250
     assert session.title == "latest prompt"
+
+
+def test_store_restore_preserves_hook_managed_state() -> None:
+    store = SessionStore()
+    store.restore_sessions(
+        [
+            AgentSession(
+                provider="codex",
+                session_id="hooked",
+                cwd="/tmp/hooked",
+                title="Hooked",
+                phase=SessionPhase.COMPLETED,
+                model=None,
+                sandbox=None,
+                approval_mode=None,
+                updated_at=10,
+                origin=SessionOrigin.RESTORED,
+                is_hook_managed=True,
+                is_session_ended=True,
+                is_process_alive=True,
+            )
+        ]
+    )
+
+    session = store.get("codex", "hooked")
+
+    assert session is not None
+    assert session.is_hook_managed is True
+    assert session.is_session_ended is True
+
+
+def test_store_hook_runtime_identity_reassigns_pid_and_tty_to_real_session() -> None:
+    store = SessionStore()
+    store.restore_sessions(
+        [
+            AgentSession(
+                provider="codex",
+                session_id="guessed",
+                cwd="/tmp/demo",
+                title="Guessed",
+                phase=SessionPhase.COMPLETED,
+                model=None,
+                sandbox=None,
+                approval_mode=None,
+                updated_at=10,
+                origin=SessionOrigin.RESTORED,
+                pid=500,
+                tty="/dev/pts/7",
+                is_process_alive=True,
+            ),
+            AgentSession(
+                provider="codex",
+                session_id="real",
+                cwd="/tmp/demo",
+                title="Real",
+                phase=SessionPhase.RUNNING,
+                model=None,
+                sandbox=None,
+                approval_mode=None,
+                updated_at=20,
+                origin=SessionOrigin.RESTORED,
+                is_process_alive=True,
+            ),
+        ]
+    )
+
+    changed = store.reassign_runtime_identity("codex", "real", 500, "/dev/pts/7")
+
+    guessed = store.get("codex", "guessed")
+    real = store.get("codex", "real")
+
+    assert changed is True
+    assert guessed is not None
+    assert guessed.pid is None
+    assert guessed.tty is None
+    assert real is not None
+    assert real.identity_confirmed_by_hook is True
+
+
+def test_store_hook_activity_with_pid_marks_session_as_hook_confirmed() -> None:
+    store = SessionStore()
+
+    session = store.apply(
+        AgentEvent(
+            type=AgentEventType.ACTIVITY_UPDATED,
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.RUNNING,
+            updated_at=100,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+            pid=1234,
+            tty="/dev/pts/9",
+        )
+    )
+
+    assert session.identity_confirmed_by_hook is True
+
+
+def test_store_does_not_regress_completed_session_to_running_from_activity() -> None:
+    store = SessionStore()
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_STARTED,
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.RUNNING,
+            updated_at=100,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_COMPLETED,
+            provider="codex",
+            session_id="thread-1",
+            phase=SessionPhase.COMPLETED,
+            updated_at=200,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+            summary="done",
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.ACTIVITY_UPDATED,
+            provider="codex",
+            session_id="thread-1",
+            phase=SessionPhase.RUNNING,
+            updated_at=250,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+            title="late activity",
+        )
+    )
+
+    session = store.get("codex", "thread-1")
+
+    assert session is not None
+    assert session.phase is SessionPhase.COMPLETED
+    assert session.completed_at == 200
+    assert session.title == "late activity"
+
+
+def test_store_does_not_regress_completed_session_to_waiting_from_activity() -> None:
+    store = SessionStore()
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_STARTED,
+            provider="claude",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.RUNNING,
+            updated_at=100,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_COMPLETED,
+            provider="claude",
+            session_id="thread-1",
+            phase=SessionPhase.COMPLETED,
+            updated_at=200,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.ACTIVITY_UPDATED,
+            provider="claude",
+            session_id="thread-1",
+            phase=SessionPhase.WAITING,
+            updated_at=250,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+
+    session = store.get("claude", "thread-1")
+
+    assert session is not None
+    assert session.phase is SessionPhase.COMPLETED
+    assert session.completed_at == 200
+
+
+def test_store_session_started_reopens_completed_session() -> None:
+    store = SessionStore()
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_STARTED,
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.RUNNING,
+            updated_at=100,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_COMPLETED,
+            provider="codex",
+            session_id="thread-1",
+            phase=SessionPhase.COMPLETED,
+            updated_at=200,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+    store.apply(
+        AgentEvent(
+            type=AgentEventType.SESSION_STARTED,
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo again",
+            phase=SessionPhase.RUNNING,
+            updated_at=300,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    )
+
+    session = store.get("codex", "thread-1")
+
+    assert session is not None
+    assert session.phase is SessionPhase.RUNNING
+    assert session.completed_at is None
+    assert session.title == "Demo again"
