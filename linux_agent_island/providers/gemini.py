@@ -270,14 +270,15 @@ class GeminiProvider(BaseProvider):
             if updated_at < now_ts - self.recent_window_seconds:
                 continue
 
-            # Title from first user message if available
+            # Prefer the latest user prompt for the session title.
             title = session_id[:8]
             messages = payload.get("messages", [])
             if isinstance(messages, list):
                 for msg in messages:
                     if isinstance(msg, dict) and msg.get("type") == "user":
-                        title = _content_to_text(msg.get("content"))[:50].strip() or title
-                        break
+                        text = _content_to_text(msg.get("content"))[:50].strip()
+                        if text:
+                            title = text
 
             sessions.append(
                 AgentSession(
@@ -324,7 +325,7 @@ class GeminiProvider(BaseProvider):
 
         now_ts = current_timestamp()
         event_type = "activity_updated"
-        phase = "waiting"
+        phase = "running"
         title = ""
         summary = ""
         last_message_preview = ""
@@ -351,7 +352,8 @@ class GeminiProvider(BaseProvider):
             is_session_end = True
             started_at = None
         elif hook_name == "Notification":
-            phase = "waiting_approval" if payload.get("notification_type") == "ToolPermission" else "waiting"
+            event_type = "permission_requested" if payload.get("notification_type") == "ToolPermission" else "question_asked"
+            phase = "waiting_approval" if payload.get("notification_type") == "ToolPermission" else "waiting_answer"
             summary = str(payload.get("message", ""))
             last_message_preview = summary
             started_at = None
@@ -367,6 +369,7 @@ class GeminiProvider(BaseProvider):
 
         return {
             "event_type": event_type,
+            "event_source": hook_name,
             "provider": self.name,
             "session_id": session_id,
             "cwd": payload.get("cwd", ""),
@@ -382,32 +385,30 @@ class GeminiProvider(BaseProvider):
             "is_session_end": is_session_end,
             "summary": summary,
             "last_message_preview": last_message_preview,
+            "permission_request": _permission_request_from_payload(payload) if event_type == "permission_requested" else None,
+            "question_prompt": _question_prompt_from_payload(payload) if event_type == "question_asked" else None,
         }
 
     def _extract_gemini_model(self, payload: dict[str, Any]) -> str | None:
-        # 1. Try common locations in hook payloads
-        llm_request = payload.get("llm_request")
-        if isinstance(llm_request, dict) and llm_request.get("model") is not None:
-            return str(llm_request["model"])
-        
-        metadata = payload.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("model") is not None:
-            return str(metadata["model"])
-            
-        config = payload.get("config")
-        if isinstance(config, dict) and config.get("model") is not None:
-            return str(config["model"])
+        # 1. Try common locations in hook payloads and session files.
+        for candidate in (
+            payload,
+            payload.get("llm_request"),
+            payload.get("metadata"),
+            payload.get("config"),
+            payload.get("session"),
+        ):
+            model = _extract_model_from_mapping(candidate)
+            if model:
+                return model
 
-        # 2. Try top-level (common in simple events or some session formats)
-        if payload.get("model") is not None:
-            return str(payload["model"])
-
-        # 3. Try scanning messages (common in full session JSON files)
+        # 2. Try scanning messages (common in full session JSON files).
         messages = payload.get("messages")
         if isinstance(messages, list):
             for msg in messages:
-                if isinstance(msg, dict) and msg.get("model"):
-                    return str(msg["model"])
+                model = _extract_model_from_mapping(msg)
+                if model:
+                    return model
 
         return None
 
@@ -433,3 +434,51 @@ def _content_to_text(content: object) -> str:
         if text:
             parts.append(text)
     return "\n".join(parts).strip()
+
+
+def _permission_request_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = str(payload.get("message", "")).strip()
+    return {
+        "title": "Permission required",
+        "summary": summary or "Permission required",
+        "affected_path": str(payload.get("path", "")),
+        "primary_action_title": "Allow",
+        "secondary_action_title": "Deny",
+        "tool_name": str(payload["tool_name"]) if payload.get("tool_name") is not None else None,
+    }
+
+
+def _question_prompt_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": str(payload.get("message", "")).strip() or "Input required",
+        "options": [],
+    }
+
+
+def _extract_model_from_mapping(candidate: Any) -> str | None:
+    if not isinstance(candidate, dict):
+        return None
+
+    for key in (
+        "model",
+        "model_name",
+        "modelName",
+        "model_id",
+        "modelId",
+        "selected_model",
+        "selectedModel",
+        "default_model",
+        "defaultModel",
+    ):
+        value = candidate.get(key)
+        if value:
+            return str(value)
+
+    for nested_key in ("model", "metadata", "config"):
+        nested = candidate.get(nested_key)
+        if isinstance(nested, dict):
+            model = _extract_model_from_mapping(nested)
+            if model:
+                return model
+
+    return None

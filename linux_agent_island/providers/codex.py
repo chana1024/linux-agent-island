@@ -10,6 +10,7 @@ from typing import Any
 
 from ..core.models import AgentSession, SessionOrigin, SessionPhase
 from .base import BaseProvider
+from .codex_rollout import CodexRolloutWatcher, _snapshot_from_rollout
 from .utils import (
     current_timestamp,
     extract_prompt_title,
@@ -54,6 +55,7 @@ class CodexProvider(BaseProvider):
             path for path in (hook_script_path, *managed_hook_script_paths) if path is not None
         )
         self.recent_window_seconds = recent_window_seconds
+        self.rollout_watcher = CodexRolloutWatcher()
 
     @property
     def name(self) -> str:
@@ -223,6 +225,7 @@ class CodexProvider(BaseProvider):
             title = extract_prompt_title(payload)
         return {
             "event_type": event_type,
+            "event_source": hook_name,
             "provider": self.name,
             "session_id": payload.get("session_id", "unknown"),
             "cwd": payload.get("cwd", ""),
@@ -238,6 +241,15 @@ class CodexProvider(BaseProvider):
             "summary": payload.get("last_assistant_message", ""),
             "last_message_preview": payload.get("last_assistant_message", ""),
         }
+
+    def poll_events(self, sessions: list[AgentSession]):
+        codex_sessions = [session for session in sessions if session.provider == self.name]
+        rollout_paths = {
+            session.session_id: path
+            for session in codex_sessions
+            if (path := self._get_rollout_path(session.session_id))
+        }
+        return self.rollout_watcher.poll(codex_sessions, rollout_paths)
 
     def _managed_command(self, event_name: str) -> str:
         if self.hook_command_prefix is not None:
@@ -422,19 +434,28 @@ class CodexProvider(BaseProvider):
 
         sessions: list[AgentSession] = []
         for row in rows:
+            codex_metadata = None
+            title_from_rollout: str | None = None
+            rollout_path = row["rollout_path"]
+            if rollout_path:
+                snapshot = _snapshot_from_rollout(Path(rollout_path))
+                codex_metadata = snapshot.metadata if snapshot is not None else None
+                if snapshot is not None:
+                    title_from_rollout = snapshot.metadata.last_user_prompt
             sessions.append(
                 AgentSession(
                     provider="codex",
                     session_id=row["id"],
                     cwd=row["cwd"] or "",
-                    title=row["title"] or row["cwd"] or row["id"],
-                    phase=SessionPhase.IDLE,
+                    title=title_from_rollout or row["title"] or row["cwd"] or row["id"],
+                    phase=SessionPhase.COMPLETED,
                     model=row["model"] if has_model_col else row["model_provider"],
                     sandbox=row["sandbox_policy"],
                     approval_mode=row["approval_mode"],
                     updated_at=row["updated_at"],
                     origin=SessionOrigin.RESTORED,
                     last_message_preview=row["last_assistant_message"] or "",
+                    codex_metadata=codex_metadata,
                 )
             )
         return sessions
@@ -461,7 +482,7 @@ class CodexProvider(BaseProvider):
                             session_id=sid,
                             cwd="",
                             title=sid,
-                            phase=SessionPhase.IDLE,
+                            phase=SessionPhase.COMPLETED,
                             model=None,
                             sandbox=None,
                             approval_mode=None,

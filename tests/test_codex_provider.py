@@ -4,6 +4,7 @@ from pathlib import Path
 
 from linux_agent_island.core.models import SessionOrigin, SessionPhase
 from linux_agent_island.providers.codex import CodexProvider
+from linux_agent_island.runtime.agent_events import AgentEventType
 
 
 def _write_thread_db(path: Path) -> None:
@@ -101,7 +102,7 @@ def test_codex_provider_loads_sessions_from_sqlite_and_history(tmp_path: Path) -
     assert session.model == "gpt-5.4"
     assert session.approval_mode == "never"
     assert session.last_message_preview == "latest prompt"
-    assert session.phase is SessionPhase.IDLE
+    assert session.phase is SessionPhase.COMPLETED
     assert session.origin is SessionOrigin.RESTORED
     assert session.is_process_alive is False
 
@@ -926,3 +927,113 @@ def test_codex_provider_loads_transcript_from_rollout_path(tmp_path: Path) -> No
         {"role": "user", "text": "hello", "timestamp": "2026-04-10T00:00:00Z"},
         {"role": "assistant", "text": "hi", "timestamp": "2026-04-10T00:00:01Z"},
     ]
+
+
+def test_codex_provider_load_sessions_populates_codex_metadata_from_rollout(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    rollout_path = tmp_path / "rollout.jsonl"
+    _write_thread_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE threads SET rollout_path = ? WHERE id = ?", (str(rollout_path), "thread-1"))
+    conn.commit()
+    conn.close()
+    rollout_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T00:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "hello"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "hi"}],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provider = CodexProvider(
+        state_db_path=db_path,
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=tmp_path / "hooks.json",
+        hook_script_path=tmp_path / "codex-hook.py",
+        recent_window_seconds=60,
+    )
+
+    session = provider.load_sessions(now=260)[0]
+    assert session.title == "hello"
+    assert session.codex_metadata is not None
+    assert session.codex_metadata.transcript_path == str(rollout_path)
+    assert session.codex_metadata.last_user_prompt == "hello"
+    assert session.codex_metadata.last_assistant_message == "hi"
+
+
+def test_codex_provider_poll_events_emits_metadata_update_from_rollout(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    rollout_path = tmp_path / "rollout.jsonl"
+    _write_thread_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE threads SET rollout_path = ? WHERE id = ?", (str(rollout_path), "thread-1"))
+    conn.commit()
+    conn.close()
+    rollout_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-10T00:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider = CodexProvider(
+        state_db_path=db_path,
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=tmp_path / "hooks.json",
+        hook_script_path=tmp_path / "codex-hook.py",
+    )
+    sessions = [
+        provider.load_sessions(now=260)[0].__class__(
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/project",
+            title="Build the thing",
+            phase=SessionPhase.RUNNING,
+            model="gpt-5.4",
+            sandbox='{"type":"workspace-write"}',
+            approval_mode="never",
+            updated_at=250,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+        )
+    ]
+
+    events = provider.poll_events(sessions)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.type is AgentEventType.METADATA_UPDATED
+    assert event.title == "hello"
+    assert event.metadata_kind == "codex"
+    assert event.codex_metadata is not None
+    assert event.codex_metadata.last_user_prompt == "hello"
