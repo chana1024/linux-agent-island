@@ -101,9 +101,9 @@ def test_codex_provider_loads_sessions_from_sqlite_and_history(tmp_path: Path) -
     assert session.model == "gpt-5.4"
     assert session.approval_mode == "never"
     assert session.last_message_preview == "latest prompt"
-    assert session.phase is SessionPhase.COMPLETED
+    assert session.phase is SessionPhase.IDLE
     assert session.origin is SessionOrigin.RESTORED
-    assert session.is_process_alive is True
+    assert session.is_process_alive is False
 
 
 def test_codex_provider_filters_out_inactive_threads(tmp_path: Path) -> None:
@@ -415,7 +415,6 @@ def test_codex_provider_replaces_old_project_path_with_installed_hook_path(tmp_p
         hooks_config_path=hooks_path,
         hook_command_prefix="/opt/linux-agent-island/venv/bin/python -m linux_agent_island.hooks",
         hook_script_path=installed_path,
-        hook_script_source_path=source_path,
         managed_hook_script_paths=(source_path,),
     )
 

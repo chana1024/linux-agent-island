@@ -30,8 +30,7 @@ def get_provider(name: str, config: AppConfig) -> BaseProvider | None:
             hooks_config_path=config.codex_hooks_path,
             hook_command_prefix=config.hook_command_prefix,
             hook_script_path=config.codex_hook_script_path,
-            hook_script_source_path=config.codex_hook_script_source_path,
-            managed_hook_script_paths=(config.codex_hook_script_source_path,),
+            managed_hook_script_paths=(config.root / "bin" / "codex-hook.py",),
         )
     if name == "gemini":
         return GeminiProvider(

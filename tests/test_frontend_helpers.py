@@ -21,6 +21,7 @@ from linux_agent_island.frontend import (
     session_metadata_tags,
     session_provider_label,
     status_dot_css_class,
+    status_dot_glyph,
     should_activate_selected_for_key,
     should_collapse_layer_for_key,
     summarize_visible_sessions,
@@ -415,6 +416,12 @@ def test_done_time_label_requires_completed_at() -> None:
 def test_status_dot_css_class_maps_phase_to_css_class() -> None:
     assert status_dot_css_class(SessionPhase.WAITING_APPROVAL) == "status-dot status-attention"
     assert status_dot_css_class(SessionPhase.RUNNING) == "status-dot status-running"
+    assert status_dot_css_class(SessionPhase.IDLE) == "status-dot status-idle"
+
+
+def test_status_dot_glyph_distinguishes_idle_from_waiting() -> None:
+    assert status_dot_glyph(SessionPhase.IDLE) == "○"
+    assert status_dot_glyph(SessionPhase.WAITING) == "●"
 
 
 def test_compute_window_position_for_expanded_detail_width() -> None:

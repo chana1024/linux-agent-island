@@ -42,7 +42,6 @@ class CodexProvider(BaseProvider):
         hooks_config_path: Path,
         hook_command_prefix: str | None = None,
         hook_script_path: Path | None = None,
-        hook_script_source_path: Path | None = None,
         managed_hook_script_paths: tuple[Path, ...] = (),
         recent_window_seconds: int = 86_400,
     ) -> None:
@@ -51,7 +50,6 @@ class CodexProvider(BaseProvider):
         self.hooks_config_path = hooks_config_path
         self.hook_command_prefix = hook_command_prefix
         self.hook_script_path = hook_script_path
-        self.hook_script_source_path = hook_script_source_path
         self.managed_hook_script_paths = tuple(
             path for path in (hook_script_path, *managed_hook_script_paths) if path is not None
         )
@@ -117,10 +115,10 @@ class CodexProvider(BaseProvider):
             rollout_path = Path(rollout_path_str)
             if rollout_path.exists():
                 return self._load_transcript_from_file(rollout_path)
-        
+
         if self.history_path.is_file():
             return self._load_transcript_from_history_file(session_id)
-            
+
         return []
 
     def _get_rollout_path(self, session_id: str) -> str | None:
@@ -389,14 +387,14 @@ class CodexProvider(BaseProvider):
                 has_transcript = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='transcript'"
                 ).fetchone()
-                
+
                 # Check for 'model' column
                 cols = [c[1] for c in conn.execute("PRAGMA table_info(threads)").fetchall()]
                 has_model_col = "model" in cols
-                
+
                 if has_transcript:
                     query = f"""
-                        SELECT 
+                        SELECT
                             id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
                             sandbox_policy, approval_mode,
                             {'model,' if has_model_col else ''}
@@ -407,7 +405,7 @@ class CodexProvider(BaseProvider):
                     """
                 else:
                     query = f"""
-                        SELECT 
+                        SELECT
                             id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
                             sandbox_policy, approval_mode,
                             {'model,' if has_model_col else ''}
@@ -416,7 +414,7 @@ class CodexProvider(BaseProvider):
                         WHERE updated_at > ?
                         ORDER BY updated_at DESC
                     """
-                    
+
                 cursor = conn.execute(query, (now_ts - self.recent_window_seconds,))
                 rows = cursor.fetchall()
         except sqlite3.Error:
@@ -424,23 +422,19 @@ class CodexProvider(BaseProvider):
 
         sessions: list[AgentSession] = []
         for row in rows:
-            # Convert row to dict to be safe with keys
-            d = dict(row)
             sessions.append(
                 AgentSession(
                     provider="codex",
-                    session_id=d["id"],
-                    cwd=d["cwd"] or "",
-                    title=d["title"] or d["cwd"] or d["id"],
-                    phase=SessionPhase.COMPLETED,  # Match test expectation
-                    model=d.get("model") or d.get("model_provider"),
-                    sandbox=d.get("sandbox_policy"),
-                    approval_mode=d.get("approval_mode"),
-                    updated_at=d["updated_at"],
+                    session_id=row["id"],
+                    cwd=row["cwd"] or "",
+                    title=row["title"] or row["cwd"] or row["id"],
+                    phase=SessionPhase.IDLE,
+                    model=row["model"] if has_model_col else row["model_provider"],
+                    sandbox=row["sandbox_policy"],
+                    approval_mode=row["approval_mode"],
+                    updated_at=row["updated_at"],
                     origin=SessionOrigin.RESTORED,
-                    is_hook_managed=True,
-                    is_process_alive=True,  # Match test expectation
-                    last_message_preview=d.get("last_assistant_message") or "",
+                    last_message_preview=row["last_assistant_message"] or "",
                 )
             )
         return sessions
@@ -467,14 +461,12 @@ class CodexProvider(BaseProvider):
                             session_id=sid,
                             cwd="",
                             title=sid,
-                            phase=SessionPhase.COMPLETED,  # Match test expectation
+                            phase=SessionPhase.IDLE,
                             model=None,
                             sandbox=None,
                             approval_mode=None,
                             updated_at=ts,
                             origin=SessionOrigin.RESTORED,
-                            is_hook_managed=True,
-                            is_process_alive=True,  # Match test expectation
                             last_message_preview=text,
                         )
         except OSError:
@@ -488,10 +480,10 @@ class CodexProvider(BaseProvider):
             with sqlite3.connect(self.state_db_path) as conn:
                 cursor = conn.execute("SELECT id, source FROM threads")
                 db_data = {row[0]: row[1] for row in cursor.fetchall()}
-                
+
         except sqlite3.Error:
             return []
-            
+
         filtered = []
         for s in cached_sessions:
             if s.session_id not in db_data:

@@ -109,6 +109,10 @@ window {
   color: #7fb6ff;
 }
 
+.status-idle {
+  color: rgba(127, 182, 255, 0.72);
+}
+
 .status-completed {
   color: rgba(255, 255, 255, 0.42);
 }
@@ -231,9 +235,15 @@ def status_dot_css_class(phase: SessionPhase) -> str:
         SessionPhase.WAITING: "status-dot status-waiting",
         SessionPhase.COMPLETED: "status-dot status-completed",
         SessionPhase.ERROR: "status-dot status-error",
-        SessionPhase.IDLE: "status-dot status-waiting",
+        SessionPhase.IDLE: "status-dot status-idle",
     }
     return mapping[phase]
+
+
+def status_dot_glyph(phase: SessionPhase) -> str:
+    if phase is SessionPhase.IDLE:
+        return "○"
+    return "●"
 
 
 def collapsed_status_phase(sessions: list[AgentSession]) -> SessionPhase:
@@ -961,8 +971,9 @@ class FrontendApp(Gtk.Application):
             pill_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             pill_content.add_css_class("pill")
             pill.add_css_class("pill")
-            icon = Gtk.Label(label="●")
-            for css_class in collapsed_status_css_class(self.sessions).split():
+            collapsed_phase = collapsed_status_phase(self.sessions)
+            icon = Gtk.Label(label=status_dot_glyph(collapsed_phase))
+            for css_class in status_dot_css_class(collapsed_phase).split():
                 icon.add_css_class(css_class)
             title = Gtk.Label(label=summarize_visible_sessions(self.sessions))
             title.add_css_class("title")
@@ -1034,7 +1045,7 @@ class FrontendApp(Gtk.Application):
         toggle.connect("clicked", lambda *_args: self._on_session_summary_clicked(session))
 
         toggle_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        dot = Gtk.Label(label="●")
+        dot = Gtk.Label(label=status_dot_glyph(session.phase))
         for css_class in status_dot_css_class(session.phase).split():
             dot.add_css_class(css_class)
         toggle_content.append(dot)
