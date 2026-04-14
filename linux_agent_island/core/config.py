@@ -7,10 +7,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .logging import DEFAULT_LOG_LEVEL, VALID_LOG_LEVELS
 
-LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
+LOG_LEVELS = tuple(VALID_LOG_LEVELS)
 DEFAULT_TOP_BAR_GAP = 8
-DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_START_ON_LOGIN = True
 
 
@@ -76,7 +76,6 @@ class AppConfig:
     codex_hooks_path: Path
     claude_hook_script_path: Path
     codex_hook_script_path: Path
-    codex_hook_script_source_path: Path
     event_socket_path: Path
     gemini_settings_path: Path = field(default_factory=lambda: Path.home() / ".gemini" / "settings.json")
     gemini_tmp_dir: Path = field(default_factory=lambda: Path.home() / ".gemini" / "tmp")
@@ -105,7 +104,6 @@ class AppConfig:
             codex_hooks_path=Path.home() / ".codex" / "hooks.json",
             claude_hook_script_path=project_root / "bin" / "claude-hook.py",
             codex_hook_script_path=Path.home() / ".codex" / "hook" / "codex-hook.py",
-            codex_hook_script_source_path=project_root / "bin" / "codex-hook.py",
             event_socket_path=runtime_dir / "events.sock",
             gemini_settings_path=Path.home() / ".gemini" / "settings.json",
             gemini_tmp_dir=Path.home() / ".gemini" / "tmp",

@@ -1,6 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
+import logging
 
 from linux_agent_island import hooks
 
@@ -103,12 +104,12 @@ def test_codex_main_skips_subagent_sessions(monkeypatch, tmp_path: Path, capsys)
                 codex_hooks_path=tmp_path / "hooks.json",
                 claude_hook_script_path=tmp_path / "claude-hook.py",
                 codex_hook_script_path=tmp_path / "codex-hook.py",
-                codex_hook_script_source_path=tmp_path / "source-codex-hook.py",
                 event_socket_path=tmp_path / "events.sock",
             )
         ),
     )
     monkeypatch.setattr(hooks, "emit_runtime_event", lambda _path, payload: emitted.append(payload))
+    monkeypatch.setattr(hooks, "_configure_hook_logging", lambda _config: "INFO")
     monkeypatch.setattr(
         hooks,
         "_is_codex_subagent_session",
@@ -119,6 +120,60 @@ def test_codex_main_skips_subagent_sessions(monkeypatch, tmp_path: Path, capsys)
     assert hooks.main() == 0
     assert emitted == []
     assert capsys.readouterr().out == ""
+
+
+def test_main_logs_hook_trigger_and_emitted_event(monkeypatch, tmp_path: Path, caplog) -> None:
+    emitted: list[dict[str, object]] = []
+    config = hooks.AppConfig.default(tmp_path)
+
+    monkeypatch.setattr(
+        hooks,
+        "_load_stdin_json",
+        lambda: {
+            "session_id": "session-1",
+            "cwd": "/tmp/demo",
+            "text": "latest prompt",
+        },
+    )
+    monkeypatch.setattr(hooks.AppConfig, "default", classmethod(lambda cls: config))
+    monkeypatch.setattr(hooks, "_configure_hook_logging", lambda _config: "INFO")
+    monkeypatch.setattr(hooks, "emit_runtime_event", lambda _path, payload: emitted.append(payload))
+    monkeypatch.setattr(hooks, "_is_codex_subagent_session", lambda *_args: False)
+    monkeypatch.setattr(
+        hooks.sys,
+        "argv",
+        ["codex-hook.py", "codex", "UserPromptSubmit"],
+    )
+
+    with caplog.at_level(logging.INFO):
+        assert hooks.main() == 0
+
+    assert emitted
+    assert "hook triggered provider=codex hook=UserPromptSubmit session_id=session-1 cwd=/tmp/demo" in caplog.text
+    assert "hook emitted runtime event provider=codex hook=UserPromptSubmit session_id=session-1" in caplog.text
+
+
+def test_main_logs_subagent_skip(monkeypatch, tmp_path: Path, caplog) -> None:
+    config = hooks.AppConfig.default(tmp_path)
+
+    monkeypatch.setattr(
+        hooks,
+        "_load_stdin_json",
+        lambda: {
+            "session_id": "subagent-1",
+            "cwd": "/tmp/demo",
+        },
+    )
+    monkeypatch.setattr(hooks.AppConfig, "default", classmethod(lambda cls: config))
+    monkeypatch.setattr(hooks, "_configure_hook_logging", lambda _config: "INFO")
+    monkeypatch.setattr(hooks, "emit_runtime_event", lambda *_args: None)
+    monkeypatch.setattr(hooks, "_is_codex_subagent_session", lambda *_args: True)
+    monkeypatch.setattr(hooks.sys, "argv", ["codex-hook.py", "codex", "Stop"])
+
+    with caplog.at_level(logging.INFO):
+        assert hooks.main() == 0
+
+    assert "hook skipped for codex subagent provider=codex hook=Stop session_id=subagent-1" in caplog.text
 
 
 def test_claude_notification_hook_does_not_reset_title(monkeypatch) -> None:
@@ -267,7 +322,6 @@ def test_gemini_main_emits_event_and_prints_json(monkeypatch, tmp_path: Path, ca
                 codex_hooks_path=tmp_path / "hooks.json",
                 claude_hook_script_path=tmp_path / "claude-hook.py",
                 codex_hook_script_path=tmp_path / "codex-hook.py",
-                codex_hook_script_source_path=tmp_path / "source-codex-hook.py",
                 event_socket_path=tmp_path / "events.sock",
             )
         ),
