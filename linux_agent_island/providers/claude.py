@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from ..core.models import AgentSession, SessionOrigin, SessionPhase
+from ..core.models import AgentSession, ClaudeSessionMetadata, SessionOrigin, SessionPhase
 from .base import BaseProvider
 from .utils import (
     current_timestamp,
@@ -128,18 +128,23 @@ class ClaudeProvider(BaseProvider):
             # We can't perfectly recover CWD from it, but the last_event usually has it
             cwd = str(last_event.get("cwd", ""))
             
-            # Find first user message for title
-            title = session_id[:8]
+            # Prefer the latest user prompt for the session title.
+            first_user_prompt: str | None = None
+            last_user_prompt: str | None = None
             for line in lines:
                 try:
                     ev = json.loads(line)
                     if ev.get("type") == "user":
                         msg = ev.get("message", {})
                         if isinstance(msg, dict):
-                            title = _content_to_text(msg.get("content"))[:50].strip() or title
-                            break
+                            text = _content_to_text(msg.get("content"))[:50].strip()
+                            if text:
+                                if first_user_prompt is None:
+                                    first_user_prompt = text
+                                last_user_prompt = text
                 except (json.JSONDecodeError, TypeError):
                     continue
+            title = last_user_prompt or session_id[:8]
 
             sessions.append(
                 AgentSession(
@@ -147,7 +152,7 @@ class ClaudeProvider(BaseProvider):
                     session_id=session_id,
                     cwd=cwd,
                     title=title,
-                    phase=self._map_phase(str(last_event.get("status", "idle"))),
+                    phase=self._map_phase(str(last_event.get("status", "completed"))),
                     model=str(last_event.get("model")) if last_event.get("model") else None,
                     sandbox=str(last_event.get("sandbox")) if last_event.get("sandbox") else None,
                     approval_mode=str(last_event.get("approval_mode")) if last_event.get("approval_mode") else None,
@@ -155,6 +160,14 @@ class ClaudeProvider(BaseProvider):
                     origin=SessionOrigin.RESTORED,
                     is_hook_managed=True,
                     is_process_alive=True, # Initially assume alive for matching
+                    claude_metadata=ClaudeSessionMetadata(
+                        transcript_path=str(session_file),
+                        initial_user_prompt=first_user_prompt,
+                        last_user_prompt=last_user_prompt,
+                        last_assistant_message=_last_assistant_text(lines),
+                        permission_mode=str(last_event.get("approval_mode")) if last_event.get("approval_mode") else None,
+                        model=str(last_event.get("model")) if last_event.get("model") else None,
+                    ),
                 )
             )
 
@@ -311,33 +324,41 @@ class ClaudeProvider(BaseProvider):
                 "SessionEnd": "ended",
                 "PreCompact": "processing",
             }
-            status = mapping.get(hook_name, "idle")
+            status = mapping.get(hook_name, "completed")
         phase_map = {
             "processing": "running",
             "running_tool": "running",
             "waiting_for_approval": "waiting_approval",
-            "waiting_for_input": "waiting",
+            "waiting_for_input": "waiting_answer",
             "ended": "completed",
-            "notification": "waiting",
+            "notification": "waiting_answer",
         }
         event_type = "activity_updated"
         title = ""
         if hook_name == "SessionStart":
             event_type = "session_started"
             title = fallback_session_title(payload)
+        elif hook_name == "PermissionRequest":
+            event_type = "permission_requested"
         elif hook_name == "SessionEnd":
             event_type = "session_completed"
         elif hook_name == "Stop":
             event_type = "session_completed"
+        elif hook_name == "Notification":
+            event_type = "question_asked"
         elif hook_name == "UserPromptSubmit":
             title = extract_prompt_title(payload)
+        permission_request = _permission_request_from_payload(payload) if event_type == "permission_requested" else None
+        question_prompt = _question_prompt_from_payload(payload) if event_type == "question_asked" else None
+        claude_metadata = _claude_metadata_from_payload(payload)
         return {
             "event_type": event_type,
+            "event_source": hook_name,
             "provider": self.name,
             "session_id": payload.get("session_id", "unknown"),
             "cwd": payload.get("cwd", ""),
             "title": title,
-            "phase": phase_map.get(str(status), "idle"),
+            "phase": phase_map.get(str(status), "completed"),
             "model": payload.get("model"),
             "updated_at": now_ts,
             "started_at": now_ts if hook_name == "UserPromptSubmit" else None,
@@ -348,6 +369,10 @@ class ClaudeProvider(BaseProvider):
             "is_session_end": hook_name == "SessionEnd",
             "summary": payload.get("message", ""),
             "last_message_preview": payload.get("message", ""),
+            "permission_request": permission_request,
+            "question_prompt": question_prompt,
+            "metadata_kind": "claude",
+            "claude_metadata": claude_metadata,
         }
 
     def session_from_event(self, payload: dict[str, object]) -> AgentSession:
@@ -358,7 +383,7 @@ class ClaudeProvider(BaseProvider):
             session_id=str(payload["session_id"]),
             cwd=cwd,
             title=title,
-            phase=self._map_phase(str(payload.get("status", payload.get("phase", "idle")))),
+            phase=self._map_phase(str(payload.get("status", payload.get("phase", "completed")))),
             model=str(payload["model"]) if payload.get("model") is not None else None,
             sandbox=str(payload["sandbox"]) if payload.get("sandbox") is not None else None,
             approval_mode=str(payload["approval_mode"]) if payload.get("approval_mode") is not None else None,
@@ -373,11 +398,11 @@ class ClaudeProvider(BaseProvider):
             "running_tool": SessionPhase.RUNNING,
             "compacting": SessionPhase.RUNNING,
             "waiting_for_approval": SessionPhase.WAITING_APPROVAL,
-            "waiting_for_input": SessionPhase.WAITING,
-            "notification": SessionPhase.WAITING,
+            "waiting_for_input": SessionPhase.WAITING_ANSWER,
+            "notification": SessionPhase.WAITING_ANSWER,
             "ended": SessionPhase.COMPLETED,
         }
-        return mapping.get(status, SessionPhase.IDLE)
+        return mapping.get(status, SessionPhase.COMPLETED)
 
 
 def _claude_project_dir_name(cwd: str) -> str:
@@ -408,6 +433,76 @@ def _content_to_text(content: object) -> str:
         if text:
             parts.append(text)
     return "\n".join(parts).strip()
+
+
+def _permission_request_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = str(payload.get("message", "")).strip()
+    tool_name = payload.get("tool_name") or payload.get("tool") or payload.get("permission_tool_name")
+    affected_path = payload.get("affected_path") or payload.get("path") or payload.get("target_path") or ""
+    title = "Permission required"
+    if tool_name:
+        title = f"Permission required for {tool_name}"
+    return {
+        "title": title,
+        "summary": summary or title,
+        "affected_path": str(affected_path),
+        "primary_action_title": "Allow",
+        "secondary_action_title": "Deny",
+        "tool_name": str(tool_name) if tool_name is not None else None,
+    }
+
+
+def _question_prompt_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    title = str(payload.get("message", "")).strip() or "Input required"
+    raw_options = payload.get("options", [])
+    options: list[dict[str, str]] = []
+    if isinstance(raw_options, list):
+        for item in raw_options:
+            if isinstance(item, dict):
+                label = str(item.get("label", "")).strip()
+                description = str(item.get("description", "")).strip()
+            else:
+                label = str(item).strip()
+                description = ""
+            if label:
+                options.append({"label": label, "description": description})
+    return {
+        "title": title,
+        "options": options,
+    }
+
+
+def _claude_metadata_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    event_name = str(payload.get("event", ""))
+    last_user_prompt = payload.get("last_user_message")
+    if last_user_prompt is None and event_name == "UserPromptSubmit":
+        last_user_prompt = payload.get("message")
+    return {
+        "transcript_path": payload.get("transcript_path") or payload.get("agent_transcript_path"),
+        "initial_user_prompt": payload.get("initial_user_prompt"),
+        "last_user_prompt": last_user_prompt,
+        "last_assistant_message": payload.get("assistant_message") or payload.get("message"),
+        "current_tool": payload.get("tool_name") or payload.get("tool"),
+        "current_tool_input_preview": payload.get("tool_input") or payload.get("tool_input_preview"),
+        "permission_mode": payload.get("approval_mode"),
+        "model": payload.get("model"),
+    }
+
+
+def _last_assistant_text(lines: list[str]) -> str | None:
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "assistant":
+            continue
+        message = payload.get("message", {})
+        if isinstance(message, dict):
+            text = _content_to_text(message.get("content"))
+            if text:
+                return text
+    return None
 
 
 def _session_timestamp_to_seconds(timestamp: object, fallback: int) -> int:

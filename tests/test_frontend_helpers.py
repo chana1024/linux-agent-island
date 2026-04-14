@@ -238,7 +238,7 @@ def test_panel_sessions_prioritizes_attention_running_then_completed() -> None:
             session_id="waiting",
             cwd="/tmp/waiting",
             title="Waiting",
-            phase=SessionPhase.WAITING,
+            phase=SessionPhase.WAITING_ANSWER,
             model=None,
             sandbox=None,
             approval_mode=None,
@@ -299,10 +299,10 @@ def test_panel_sessions_prioritizes_attention_running_then_completed() -> None:
 
     assert [session.session_id for session in panel_sessions(sessions)] == [
         "approval",
+        "waiting",
         "running",
         "completed-newer",
         "completed-older",
-        "waiting",
     ]
 
 
@@ -415,13 +415,14 @@ def test_done_time_label_requires_completed_at() -> None:
 
 def test_status_dot_css_class_maps_phase_to_css_class() -> None:
     assert status_dot_css_class(SessionPhase.WAITING_APPROVAL) == "status-dot status-attention"
+    assert status_dot_css_class(SessionPhase.WAITING_ANSWER) == "status-dot status-attention"
     assert status_dot_css_class(SessionPhase.RUNNING) == "status-dot status-running"
-    assert status_dot_css_class(SessionPhase.IDLE) == "status-dot status-idle"
+    assert status_dot_css_class(SessionPhase.COMPLETED) == "status-dot status-completed"
 
 
-def test_status_dot_glyph_distinguishes_idle_from_waiting() -> None:
-    assert status_dot_glyph(SessionPhase.IDLE) == "○"
-    assert status_dot_glyph(SessionPhase.WAITING) == "●"
+def test_status_dot_glyph_distinguishes_completed_from_live() -> None:
+    assert status_dot_glyph(SessionPhase.COMPLETED) == "○"
+    assert status_dot_glyph(SessionPhase.RUNNING) == "●"
 
 
 def test_compute_window_position_for_expanded_detail_width() -> None:
