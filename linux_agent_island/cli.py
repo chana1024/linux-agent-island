@@ -118,7 +118,6 @@ def daemon(args: argparse.Namespace) -> int:
         env=env,
     )
     children.append(backend)
-    time.sleep(0.5)
 
     frontend = subprocess.Popen(
         [sys.executable, "-m", "linux_agent_island.frontend", "--log-level", log_level],
@@ -138,7 +137,7 @@ def daemon(args: argparse.Namespace) -> int:
                 return backend.returncode or 0
             if frontend.poll() is not None:
                 return frontend.returncode or 0
-            time.sleep(0.5)
+            time.sleep(0.2)
     finally:
         stop_children()
 

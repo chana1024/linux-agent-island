@@ -73,7 +73,7 @@ class BackendService:
     def start(self) -> None:
         self.config.runtime_dir.mkdir(parents=True, exist_ok=True)
         self._install_hooks()
-        self._reload_provider_state()
+        self._fast_load_cache()
         self.socket_server.start()
         GLib.timeout_add_seconds(2, self._reconcile_sessions)
         self.owner_id = Gio.bus_own_name(
@@ -84,6 +84,9 @@ class BackendService:
             None,
             None,
         )
+        # Defer heavy provider and process loading to after the loop starts
+        GLib.idle_add(self._deferred_reload_state)
+        
         signal.signal(signal.SIGINT, self._stop_signal)
         signal.signal(signal.SIGTERM, self._stop_signal)
         self.loop.run()
@@ -105,13 +108,25 @@ class BackendService:
         for provider in self.providers:
             provider.install_hooks()
 
-    def _reload_provider_state(self) -> None:
+    def _fast_load_cache(self) -> None:
         cached_sessions = self.session_cache.load()
         filtered_cached_sessions = filter_cached_sessions_for_restore(cached_sessions, self.providers)
+        self.store = SessionStore()
+        if filtered_cached_sessions:
+            self.store.restore_sessions(filtered_cached_sessions)
+
+    def _deferred_reload_state(self) -> bool:
+        logger.info("deferred state reload starting")
+        cached_sessions = self.session_cache.load()
+        filtered_cached_sessions = filter_cached_sessions_for_restore(cached_sessions, self.providers)
+        
         provider_sessions: list[AgentSession] = []
         for provider in self.providers:
-            live_sessions = provider.load_sessions()
-            provider_sessions.extend(live_sessions)
+            try:
+                live_sessions = provider.load_sessions()
+                provider_sessions.extend(live_sessions)
+            except Exception as exc:
+                logger.error("failed to load sessions for provider %s: %s", provider.name, exc)
 
         process_tree = self.process_inspector.build_process_tree()
         processes = self.process_inspector.list_agent_processes(process_tree)
@@ -120,11 +135,20 @@ class BackendService:
             cached_sessions=filtered_cached_sessions,
             provider_sessions=provider_sessions,
         )
-        self.store = SessionStore()
+        
         if restored_sessions:
             self.store.restore_sessions(restored_sessions)
+            self._persist_sessions()
+            self._emit_sessions_changed()
+            
+        logger.info("deferred state reload finished")
+        return False  # Run only once
 
-        self._persist_sessions()
+    def _reload_provider_state(self) -> None:
+        # Keeping this for backward compatibility or direct calls if needed, 
+        # though start() now uses the split phases.
+        self._fast_load_cache()
+        self._deferred_reload_state()
 
     def _on_runtime_event(self, payload: dict[str, object]) -> None:
         event = AgentEvent.from_payload(payload)

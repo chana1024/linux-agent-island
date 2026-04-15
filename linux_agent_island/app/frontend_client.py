@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from gi.repository import Gio, GLib
 
@@ -13,15 +14,33 @@ logger = logging.getLogger(__name__)
 
 
 def connect_proxy(config: AppConfig) -> Gio.DBusProxy:
-    return Gio.DBusProxy.new_for_bus_sync(
-        Gio.BusType.SESSION,
-        Gio.DBusProxyFlags.NONE,
-        None,
-        config.dbus_name,
-        config.dbus_path,
-        config.dbus_name,
-        None,
-    )
+    # During simultaneous startup, the backend might not have claimed the D-Bus name yet.
+    # We retry for a short period to be resilient.
+    max_attempts = 10
+    last_error = None
+    
+    for attempt in range(max_attempts):
+        try:
+            return Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SESSION,
+                Gio.DBusProxyFlags.NONE,
+                None,
+                config.dbus_name,
+                config.dbus_path,
+                config.dbus_name,
+                None,
+            )
+        except GLib.Error as exc:
+            last_error = exc
+            if attempt < max_attempts - 1:
+                time.sleep(0.1)
+                continue
+            raise
+
+    # Should not reach here if max_attempts > 0
+    if last_error:
+        raise last_error
+    raise RuntimeError("Failed to connect to D-Bus proxy")
 
 
 def list_sessions(proxy: Gio.DBusProxy) -> list[AgentSession]:
