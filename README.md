@@ -2,11 +2,28 @@
 
 Linux Agent Island is a small X11 desktop island for local coding agents. It shows active Claude Code, Codex CLI, and Gemini CLI sessions, keeps state in a background service, and can jump back to the terminal that owns a session.
 
+Keywords: `linux agent dashboard`, `codex cli desktop widget`, `claude code session monitor`, `gemini cli session tracker`, `x11 floating panel`, `jump to terminal session`.
+
 ## Demo
 
 The GIF below shows the island listing an existing session and jumping back to its terminal:
 
 ![Linux Agent Island jump demo](docs/demo/island-demo-existing-jump-main-hq.gif)
+
+## What It Solves
+
+- Track active local AI coding agent sessions in one always-on-top island.
+- See Claude Code, Codex CLI, and Gemini CLI status without switching terminals.
+- Jump directly to the terminal window that owns a session.
+- Keep session state in a background service so the UI can be reopened instantly.
+
+## Features
+
+- X11 floating island UI for local agent sessions.
+- User-level `systemd --user` service for persistent backend/frontend lifecycle.
+- D-Bus powered controls (`open`, `settings`, `status`, jump-to-session).
+- Hook-based ingestion for Claude/Codex/Gemini events.
+- Session restore and process reconciliation after restart.
 
 ## Requirements
 
@@ -90,3 +107,21 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m pytest -q
 
 - [Desktop app, service, hooks, and files](docs/desktop-app.md)
 - [Historical design notes](docs/superpowers/)
+
+## FAQ
+
+### Does this support Wayland?
+
+Not yet. Current support is X11 only.
+
+### Which agents are supported?
+
+Claude Code, Codex CLI, and Gemini CLI.
+
+### Can I jump from the island to the exact terminal session?
+
+Yes. Use the jump button on a session card; the app focuses the matched terminal window when available.
+
+### Where are logs and runtime files stored?
+
+Under `~/.local/state/linux-agent-island/` (including `logs/` and `sessions.json`).
