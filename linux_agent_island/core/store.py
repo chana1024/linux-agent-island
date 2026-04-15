@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Iterable
 
 from .models import AgentSession, SessionOrigin, SessionPhase
+from .session_reducer import apply_live_event, restore_session
 from ..runtime.agent_events import AgentEvent, AgentEventType
 
 
@@ -39,6 +40,7 @@ class SessionStore:
                     model=session.model,
                     sandbox=session.sandbox,
                     approval_mode=session.approval_mode,
+                    source=AgentEventType.SESSION_RESTORED.value,
                     origin=session.origin,
                     started_at=session.started_at,
                     completed_at=session.completed_at,
@@ -88,10 +90,23 @@ class SessionStore:
             for session in sessions:
                 key = (session.provider, session.session_id)
                 current = self._sessions.get(key)
-                if current is None or current == session:
+                if current is None:
+                    self._sessions[key] = session
+                    changed = True
                     continue
-                self._sessions[key] = session
-                changed = True
+                # Process reconciliation must only refresh runtime identity/presence.
+                # Overwriting the whole object can regress phase/updated_at when
+                # runtime events are applied concurrently from the socket thread.
+                merged = replace(
+                    current,
+                    pid=session.pid,
+                    tty=session.tty,
+                    has_interactive_window=session.has_interactive_window,
+                    is_focused=session.is_focused,
+                )
+                if merged != current:
+                    self._sessions[key] = merged
+                    changed = True
         return changed
 
     def reassign_runtime_identity(
@@ -173,117 +188,8 @@ class SessionStore:
 
     def _apply_locked(self, current: AgentSession | None, event: AgentEvent) -> AgentSession:
         if event.type is AgentEventType.SESSION_RESTORED:
-            return AgentSession(
-                provider=event.provider,
-                session_id=event.session_id,
-                cwd=event.cwd or (current.cwd if current else ""),
-                title=event.title or (current.title if current else event.session_id),
-                phase=event.phase or (current.phase if current else SessionPhase.COMPLETED),
-                model=event.model if event.model is not None else (current.model if current else None),
-                sandbox=event.sandbox if event.sandbox is not None else (current.sandbox if current else None),
-                approval_mode=event.approval_mode if event.approval_mode is not None else (current.approval_mode if current else None),
-                updated_at=event.updated_at,
-                started_at=event.started_at if event.started_at is not None else (current.started_at if current else event.updated_at),
-                completed_at=event.completed_at if event.completed_at is not None else (current.completed_at if current else None),
-                origin=SessionOrigin.RESTORED,
-                summary=event.summary or (current.summary if current else ""),
-                pid=event.pid if event.pid is not None else (current.pid if current else None),
-                tty=event.tty if event.tty is not None else (current.tty if current else None),
-                has_interactive_window=current.has_interactive_window if current else False,
-                is_focused=current.is_focused if current else False,
-                is_hook_managed=event.is_hook_managed if event.is_hook_managed else (current.is_hook_managed if current else False),
-                identity_confirmed_by_hook=(
-                    event.identity_confirmed_by_hook
-                    if event.identity_confirmed_by_hook
-                    else (current.identity_confirmed_by_hook if current else False)
-                ),
-                is_session_ended=event.is_session_end if event.is_session_end else (current.is_session_ended if current else False),
-                is_process_alive=event.is_process_alive or (current.is_process_alive if current else False),
-                process_not_seen_count=(
-                    event.process_not_seen_count
-                    if event.process_not_seen_count
-                    else (current.process_not_seen_count if current else 0)
-                ),
-                last_message_preview=event.last_message_preview or (current.last_message_preview if current else ""),
-            )
-
-        base = current or AgentSession(
-            provider=event.provider,
-            session_id=event.session_id,
-            cwd=event.cwd,
-            title=event.title or event.session_id,
-            phase=event.phase or SessionPhase.IDLE,
-            model=event.model,
-            sandbox=event.sandbox,
-            approval_mode=event.approval_mode,
-            updated_at=event.updated_at,
-            started_at=event.started_at or event.updated_at,
-            completed_at=event.completed_at,
-            origin=event.origin,
-            summary=event.summary,
-            pid=event.pid,
-            tty=event.tty,
-            is_hook_managed=event.is_hook_managed,
-            identity_confirmed_by_hook=event.identity_confirmed_by_hook,
-            is_process_alive=True,
-            process_not_seen_count=0,
-            last_message_preview=event.last_message_preview,
-        )
-
-        phase = event.phase if event.phase is not None else base.phase
-        if (
-            base.phase is SessionPhase.COMPLETED
-            and event.type is AgentEventType.ACTIVITY_UPDATED
-            and phase is not SessionPhase.COMPLETED
-        ):
-            phase = base.phase
-        summary = event.summary or base.summary
-        if not summary and event.last_message_preview:
-            summary = event.last_message_preview
-
-        is_session_ended = base.is_session_ended or event.is_session_end
-        if event.type is AgentEventType.SESSION_STARTED:
-            is_session_ended = False
-        identity_confirmed_by_hook = (
-            event.identity_confirmed_by_hook
-            or base.identity_confirmed_by_hook
-            or (event.is_hook_managed and (event.pid is not None or event.tty is not None))
-        )
-
-        return replace(
-            base,
-            cwd=event.cwd or base.cwd,
-            title=event.title or base.title,
-            phase=phase,
-            model=event.model if event.model is not None else base.model,
-            sandbox=event.sandbox if event.sandbox is not None else base.sandbox,
-            approval_mode=event.approval_mode if event.approval_mode is not None else base.approval_mode,
-            updated_at=event.updated_at,
-            started_at=(
-                event.started_at
-                if event.started_at is not None
-                else (
-                    event.updated_at
-                    if event.type is AgentEventType.SESSION_STARTED
-                    else (base.started_at or event.updated_at)
-                )
-            ),
-            completed_at=(
-                event.updated_at
-                if event.type is AgentEventType.SESSION_COMPLETED
-                else (None if event.type is AgentEventType.SESSION_STARTED else base.completed_at)
-            ),
-            origin=event.origin if event.type is AgentEventType.SESSION_STARTED else base.origin,
-            summary=summary,
-            pid=event.pid if event.pid is not None else base.pid,
-            tty=event.tty if event.tty is not None else base.tty,
-            is_hook_managed=base.is_hook_managed or event.is_hook_managed,
-            identity_confirmed_by_hook=identity_confirmed_by_hook,
-            is_session_ended=is_session_ended,
-            is_process_alive=True,
-            process_not_seen_count=0,
-            last_message_preview=event.last_message_preview or base.last_message_preview,
-        )
+            return restore_session(current, event)
+        return apply_live_event(current, event)
 
     def _log_transition(
         self,

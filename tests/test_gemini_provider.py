@@ -234,6 +234,10 @@ def test_gemini_provider_loads_sessions_from_tmp_dir(tmp_path: Path) -> None:
                         "content": "hello",
                     },
                     {
+                        "type": "user",
+                        "content": "latest prompt",
+                    },
+                    {
                         "type": "gemini",
                         "model": "gemini-2.5-pro",
                         "content": "hi",
@@ -255,8 +259,32 @@ def test_gemini_provider_loads_sessions_from_tmp_dir(tmp_path: Path) -> None:
     session = sessions[0]
     assert session.session_id == "abcd1234"
     assert session.cwd == "/home/user/project1"
-    assert session.title == "hello"
+    assert session.title == "latest prompt"
     assert session.provider == "gemini"
     assert session.model == "gemini-2.5-pro"
     assert session.is_hook_managed is True
     assert session.is_process_alive is True
+
+
+def test_gemini_provider_extracts_model_from_nested_alias_fields(tmp_path: Path) -> None:
+    provider = GeminiProvider(
+        settings_path=tmp_path / "settings.json",
+        tmp_dir=tmp_path / "tmp",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+    )
+
+    event = provider.build_event(
+        "BeforeAgent",
+        {
+            "session_id": "gemini-1",
+            "cwd": "/tmp/demo",
+            "prompt": "latest prompt",
+            "metadata": {
+                "selectedModel": "gemini-2.5-flash",
+            },
+        },
+        pid=123,
+        tty="/dev/pts/7",
+    )
+
+    assert event["model"] == "gemini-2.5-flash"

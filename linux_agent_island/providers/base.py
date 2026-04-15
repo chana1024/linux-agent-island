@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..core.models import AgentSession
+    from ..runtime.agent_events import AgentEvent
 
 
 class BaseProvider:
@@ -54,3 +55,7 @@ class BaseProvider:
         Island event dictionary.
         """
         raise NotImplementedError
+
+    def poll_events(self, sessions: list[AgentSession]) -> list[AgentEvent]:
+        """Returns provider-specific incremental events from local state sources."""
+        return []
