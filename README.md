@@ -2,6 +2,12 @@
 
 Linux Agent Island is a small X11 desktop island for local coding agents. It shows active Claude Code, Codex CLI, and Gemini CLI sessions, keeps state in a background service, and can jump back to the terminal that owns a session.
 
+## Demo
+
+The GIF below shows the island listing an existing session and jumping back to its terminal:
+
+![Linux Agent Island jump demo](docs/demo/island-demo-existing-jump-main-hq.gif)
+
 ## Requirements
 
 Ubuntu/Debian:
