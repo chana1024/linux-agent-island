@@ -213,7 +213,7 @@ class CodexProvider(BaseProvider):
 
         now_ts = current_timestamp()
         event_type = "activity_updated"
-        phase = "running"
+        phase = "completed"
         title = ""
         if hook_name == "Stop":
             event_type = "session_completed"
@@ -222,6 +222,7 @@ class CodexProvider(BaseProvider):
             event_type = "session_started"
             title = fallback_session_title(payload)
         elif hook_name == "UserPromptSubmit":
+            phase = "running"
             title = extract_prompt_title(payload)
         return {
             "event_type": event_type,

@@ -1037,3 +1037,29 @@ def test_codex_provider_poll_events_emits_metadata_update_from_rollout(tmp_path:
     assert event.metadata_kind == "codex"
     assert event.codex_metadata is not None
     assert event.codex_metadata.last_user_prompt == "hello"
+
+def test_codex_provider_session_start_is_initially_completed_not_running(tmp_path: Path) -> None:
+    provider = CodexProvider(
+        state_db_path=tmp_path / "state.sqlite",
+        history_path=tmp_path / "history.jsonl",
+        hooks_config_path=tmp_path / "hooks.json",
+        hook_script_path=tmp_path / "codex-hook.py",
+    )
+
+    # 1. SessionStart should be "completed" (idle)
+    start_event = provider.build_event(
+        "SessionStart",
+        {"session_id": "codex-1", "cwd": "/tmp/demo"},
+        pid=123,
+        tty="/dev/pts/7",
+    )
+    assert start_event["phase"] == "completed"
+
+    # 2. UserPromptSubmit should be "running"
+    prompt_event = provider.build_event(
+        "UserPromptSubmit",
+        {"session_id": "codex-1", "cwd": "/tmp/demo", "prompt": "build it"},
+        pid=123,
+        tty="/dev/pts/7",
+    )
+    assert prompt_event["phase"] == "running"

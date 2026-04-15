@@ -798,3 +798,22 @@ def test_list_agent_processes_detects_gemini_command(monkeypatch) -> None:
     processes = inspector.list_agent_processes(tree)
 
     assert processes == [AgentProcessInfo(provider="gemini", pid=100, tty="pts/7", cwd="/tmp/demo")]
+
+
+def test_list_agent_processes_dedupes_same_tty_cwd_gemini_wrapper_and_node(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    tree = {
+        100: ProcessInfo(pid=100, ppid=1, command="gemini", tty="pts/7", args="gemini"),
+        101: ProcessInfo(
+            pid=101,
+            ppid=100,
+            command="node",
+            tty="pts/7",
+            args="/home/lzn/.nvm/versions/node/v24.13.0/bin/node /home/lzn/.nvm/versions/node/v24.13.0/lib/node_modules/@google/gemini-cli/dist/index.js",
+        ),
+    }
+    monkeypatch.setattr(inspector, "process_cwd", lambda _pid, **_kwargs: "/tmp/demo")
+
+    processes = inspector.list_agent_processes(tree)
+
+    assert processes == [AgentProcessInfo(provider="gemini", pid=100, tty="pts/7", cwd="/tmp/demo")]

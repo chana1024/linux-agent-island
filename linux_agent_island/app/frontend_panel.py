@@ -158,11 +158,12 @@ class FrontendPanelMixin:
 
         action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         action_row.set_halign(Gtk.Align.END)
-        for tag_text in session_metadata_tags(session):
+        for tag_text, tag_class in session_metadata_tags(session):
             tag = Gtk.Label(label=tag_text)
             tag.set_ellipsize(3)
             tag.set_max_width_chars(18)
             tag.add_css_class("session-tag")
+            tag.add_css_class(tag_class)
             action_row.append(tag)
 
         jump_button = Gtk.Button()

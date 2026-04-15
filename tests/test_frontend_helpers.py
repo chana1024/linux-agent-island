@@ -227,8 +227,8 @@ def test_session_metadata_tags_include_model_and_window_state() -> None:
         is_focused=True,
     )
 
-    assert session_metadata_tags(windowed) == ["Claude Code", "sonnet"]
-    assert session_metadata_tags(focused) == ["Codex", "Unknown model"]
+    assert session_metadata_tags(windowed) == [("Claude Code", "tag-provider-claude"), ("sonnet", "tag-model")]
+    assert session_metadata_tags(focused) == [("Codex", "tag-provider-codex"), ("Unknown model", "tag-model")]
 
 
 def test_panel_sessions_prioritizes_attention_running_then_completed() -> None:
@@ -352,8 +352,8 @@ def test_refresh_completion_highlights_uses_latest_completed_session_as_target()
     )
 
     assert target == ("codex", "newer")
-    assert highlighted[("codex", "older")] == 200 + HIGHLIGHT_DURATION_SECONDS
-    assert highlighted[("codex", "newer")] == 200 + HIGHLIGHT_DURATION_SECONDS
+    assert highlighted[("codex", "older")] == 0
+    assert highlighted[("codex", "newer")] == 0
 
 
 def test_refresh_completion_highlights_skips_sessions_without_done_time_label() -> None:
@@ -371,13 +371,17 @@ def test_refresh_completion_highlights_skips_sessions_without_done_time_label() 
 
 def test_prune_expired_highlights_drops_expired_entries() -> None:
     highlighted = {
-        ("codex", "keep"): 501,
+        ("codex", "keep-forever"): 0,
+        ("codex", "keep-timestamp"): 501,
         ("codex", "expire"): 500,
     }
 
     pruned = prune_expired_highlights(highlighted, now_ts=500)
 
-    assert pruned == {("codex", "keep"): 501}
+    assert pruned == {
+        ("codex", "keep-forever"): 0,
+        ("codex", "keep-timestamp"): 501,
+    }
 
 
 def test_compute_expanded_window_height_tracks_scroll_area_height() -> None:

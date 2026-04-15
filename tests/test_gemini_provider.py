@@ -1,8 +1,11 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
 from linux_agent_island.providers.gemini import GeminiProvider
+from linux_agent_island.runtime.agent_events import AgentEventType
 
 
 def _managed_hook(command: str) -> dict[str, object]:
@@ -266,6 +269,103 @@ def test_gemini_provider_loads_sessions_from_tmp_dir(tmp_path: Path) -> None:
     assert session.is_process_alive is True
 
 
+def test_gemini_provider_loads_sessions_with_sha256_project_hash(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    tmp_dir = tmp_path / "tmp"
+    project_cwd = "/home/user/project-hashed"
+    project_hash = hashlib.sha256(project_cwd.encode("utf-8")).hexdigest()
+    project_nickname = "project-hashed"
+    (tmp_path / "projects.json").write_text(
+        json.dumps({"projects": {project_cwd: project_nickname}}),
+        encoding="utf-8",
+    )
+
+    chat_dir = tmp_dir / project_nickname / "chats"
+    chat_dir.mkdir(parents=True)
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    (chat_dir / "session-2026-04-10T01-02-hashed.json").write_text(
+        json.dumps(
+            {
+                "sessionId": "hashed-session",
+                "projectHash": project_hash,
+                "startTime": now_iso,
+                "lastUpdated": now_iso,
+                "messages": [
+                    {"type": "user", "content": "hello"},
+                    {"type": "gemini", "model": "gemini-3-flash-preview", "content": "hi"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = GeminiProvider(
+        settings_path=settings_path,
+        tmp_dir=tmp_dir,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+    )
+
+    sessions = provider.load_sessions()
+    assert len(sessions) == 1
+    assert sessions[0].cwd == project_cwd
+    assert sessions[0].model == "gemini-3-flash-preview"
+
+
+def test_gemini_provider_poll_events_backfills_model_from_session_file(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    projects_path = tmp_path / "projects.json"
+    tmp_dir = tmp_path / "tmp"
+    projects_path.write_text(
+        json.dumps({"projects": {"/home/user/project1": "nickname1"}}),
+        encoding="utf-8",
+    )
+    chat_dir = tmp_dir / "nickname1" / "chats"
+    chat_dir.mkdir(parents=True)
+    (chat_dir / "session-2026-04-10T01-02-abcd1234.json").write_text(
+        json.dumps(
+            {
+                "sessionId": "abcd1234",
+                "projectHash": "nickname1",
+                "lastUpdated": "2026-04-10T01:02:10Z",
+                "messages": [
+                    {"type": "user", "content": "hello"},
+                    {"type": "gemini", "model": "gemini-2.5-pro", "content": "hi"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = GeminiProvider(
+        settings_path=settings_path,
+        tmp_dir=tmp_dir,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+    )
+    sessions = [
+        AgentSession(
+            provider="gemini",
+            session_id="abcd1234",
+            cwd="/home/user/project1",
+            title="latest prompt",
+            phase=SessionPhase.RUNNING,
+            model=None,
+            sandbox=None,
+            approval_mode=None,
+            updated_at=1,
+            origin=SessionOrigin.LIVE,
+            is_hook_managed=True,
+            is_process_alive=True,
+        )
+    ]
+
+    events = provider.poll_events(sessions)
+    assert len(events) == 1
+    event = events[0]
+    assert event.type is AgentEventType.METADATA_UPDATED
+    assert event.provider == "gemini"
+    assert event.session_id == "abcd1234"
+    assert event.model == "gemini-2.5-pro"
+    assert event.source == "gemini_session_poll"
+
+
 def test_gemini_provider_extracts_model_from_nested_alias_fields(tmp_path: Path) -> None:
     provider = GeminiProvider(
         settings_path=tmp_path / "settings.json",
@@ -288,3 +388,29 @@ def test_gemini_provider_extracts_model_from_nested_alias_fields(tmp_path: Path)
     )
 
     assert event["model"] == "gemini-2.5-flash"
+
+
+def test_gemini_provider_session_start_is_initially_completed_not_running(tmp_path: Path) -> None:
+    provider = GeminiProvider(
+        settings_path=tmp_path / "settings.json",
+        tmp_dir=tmp_path / "tmp",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+    )
+
+    # 1. SessionStart should be "completed" (idle)
+    start_event = provider.build_event(
+        "SessionStart",
+        {"session_id": "gemini-1", "cwd": "/tmp/demo"},
+        pid=123,
+        tty="/dev/pts/7",
+    )
+    assert start_event["phase"] == "completed"
+
+    # 2. BeforeAgent should be "running"
+    before_event = provider.build_event(
+        "BeforeAgent",
+        {"session_id": "gemini-1", "cwd": "/tmp/demo", "prompt": "think about it"},
+        pid=123,
+        tty="/dev/pts/7",
+    )
+    assert before_event["phase"] == "running"

@@ -13,13 +13,14 @@ gi.require_version("GLib", "2.0")
 from gi.repository import Gio, GLib
 
 from ..core.config import AppConfig
+from ..core.models import AgentSession
 from ..core.logging import configure_logging
 from ..core.store import SessionStore
 from ..providers import get_all_providers, get_provider
 from ..runtime.agent_events import AgentEvent
 from ..runtime.events import EventSocketServer
 from ..runtime.processes import SessionProcessInspector
-from ..runtime.restore import filter_cached_sessions_for_restore
+from ..runtime.restore import build_sessions_from_processes, filter_cached_sessions_for_restore
 from ..runtime.session_cache import SessionCache
 
 
@@ -106,12 +107,22 @@ class BackendService:
 
     def _reload_provider_state(self) -> None:
         cached_sessions = self.session_cache.load()
-        self.store.restore_sessions(filter_cached_sessions_for_restore(cached_sessions, self.providers))
-
+        filtered_cached_sessions = filter_cached_sessions_for_restore(cached_sessions, self.providers)
+        provider_sessions: list[AgentSession] = []
         for provider in self.providers:
             live_sessions = provider.load_sessions()
-            if live_sessions:
-                self.store.restore_sessions(live_sessions)
+            provider_sessions.extend(live_sessions)
+
+        process_tree = self.process_inspector.build_process_tree()
+        processes = self.process_inspector.list_agent_processes(process_tree)
+        restored_sessions = build_sessions_from_processes(
+            processes,
+            cached_sessions=filtered_cached_sessions,
+            provider_sessions=provider_sessions,
+        )
+        self.store = SessionStore()
+        if restored_sessions:
+            self.store.restore_sessions(restored_sessions)
 
         self._persist_sessions()
 

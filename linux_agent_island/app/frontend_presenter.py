@@ -11,7 +11,7 @@ COLLAPSED_WIDTH = 220
 COLLAPSED_HEIGHT = 60
 EXPANDED_WIDTH = 720
 DETAIL_EXPANDED_WIDTH = EXPANDED_WIDTH * 2
-HIGHLIGHT_DURATION_SECONDS = 5 * 60
+HIGHLIGHT_DURATION_SECONDS = 0
 BASE_EXPANDED_MAX_SCROLL_HEIGHT = 352
 BASE_DETAIL_MAX_SCROLL_HEIGHT = 620
 EXPANDED_HEIGHT_NUMERATOR = 3
@@ -144,10 +144,10 @@ def session_provider_label(provider: str) -> str:
     return mapping.get(provider.lower(), provider)
 
 
-def session_metadata_tags(session: AgentSession) -> list[str]:
+def session_metadata_tags(session: AgentSession) -> list[tuple[str, str]]:
     return [
-        session_provider_label(session.provider),
-        session.model or "Unknown model",
+        (session_provider_label(session.provider), f"tag-provider-{session.provider.lower()}"),
+        (session.model or "Unknown model", "tag-model"),
     ]
 
 
@@ -173,7 +173,10 @@ def refresh_completion_highlights(
     for session in completed_sessions:
         if not has_done_time_label(session):
             continue
-        updated[session_key(session)] = now_ts + HIGHLIGHT_DURATION_SECONDS
+        
+        # Use 0 to indicate the highlight never expires automatically
+        updated[session_key(session)] = 0
+        
         if latest_session is None:
             latest_session = session
             continue
@@ -192,7 +195,7 @@ def prune_expired_highlights(
     return {
         key: expires_at
         for key, expires_at in highlighted_until.items()
-        if expires_at > now_ts
+        if expires_at == 0 or expires_at > now_ts
     }
 
 

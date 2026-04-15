@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 from datetime import datetime
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from ..core.models import AgentSession
 
 from ..core.models import AgentSession, SessionOrigin, SessionPhase
+from ..runtime.agent_events import AgentEvent, AgentEventType
 
 
 HOOK_EVENTS = (
@@ -224,17 +226,7 @@ class GeminiProvider(BaseProvider):
             return []
 
         now_ts = current_timestamp()
-        nickname_to_cwd: dict[str, str] = {}
-        projects_config = self.settings_path.parent / "projects.json"
-        if projects_config.exists():
-            try:
-                data = json.loads(projects_config.read_text(encoding="utf-8"))
-                projects = data.get("projects", {})
-                if isinstance(projects, dict):
-                    for cwd, nickname in projects.items():
-                        nickname_to_cwd[nickname] = cwd
-            except (OSError, json.JSONDecodeError):
-                pass
+        nickname_to_cwd, hash_to_cwd = self._load_project_mappings()
 
         sessions: list[AgentSession] = []
         # Use glob to find all chats session files: ~/.gemini/tmp/*/chats/session-*.json
@@ -249,7 +241,12 @@ class GeminiProvider(BaseProvider):
                 continue
 
             project_hash = str(payload.get("projectHash", ""))
-            cwd = nickname_to_cwd.get(project_hash, "")
+            session_dir_name = session_path.parent.parent.name
+            cwd = (
+                hash_to_cwd.get(project_hash)
+                or nickname_to_cwd.get(project_hash)
+                or nickname_to_cwd.get(session_dir_name, "")
+            )
 
             last_updated_str = payload.get("lastUpdated")
             start_time_str = payload.get("startTime")
@@ -300,6 +297,57 @@ class GeminiProvider(BaseProvider):
 
         return sessions
 
+    def poll_events(self, sessions: list[AgentSession]) -> list[AgentEvent]:
+        events: list[AgentEvent] = []
+        for session in sessions:
+            if session.provider != self.name:
+                continue
+            transcript_path = self._transcript_path(session.session_id, cwd=session.cwd)
+            if transcript_path is None:
+                continue
+            try:
+                payload = json.loads(transcript_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            model = self._extract_gemini_model(payload)
+            if not model or model == session.model:
+                continue
+            updated_at = _session_updated_at(payload, transcript_path)
+            events.append(
+                AgentEvent(
+                    type=AgentEventType.METADATA_UPDATED,
+                    provider=self.name,
+                    session_id=session.session_id,
+                    updated_at=updated_at,
+                    model=model,
+                    source="gemini_session_poll",
+                    origin=session.origin,
+                )
+            )
+        return events
+
+    def _load_project_mappings(self) -> tuple[dict[str, str], dict[str, str]]:
+        nickname_to_cwd: dict[str, str] = {}
+        hash_to_cwd: dict[str, str] = {}
+        projects_config = self.settings_path.parent / "projects.json"
+        if not projects_config.exists():
+            return nickname_to_cwd, hash_to_cwd
+        try:
+            data = json.loads(projects_config.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return nickname_to_cwd, hash_to_cwd
+        projects = data.get("projects", {})
+        if not isinstance(projects, dict):
+            return nickname_to_cwd, hash_to_cwd
+        for cwd, nickname in projects.items():
+            cwd_str = str(cwd)
+            nickname_str = str(nickname)
+            if nickname_str:
+                nickname_to_cwd[nickname_str] = cwd_str
+            if cwd_str:
+                hash_to_cwd[hashlib.sha256(cwd_str.encode("utf-8")).hexdigest()] = cwd_str
+        return nickname_to_cwd, hash_to_cwd
+
     def get_process_signatures(self) -> dict[str, list[str]]:
         return {
             "commands": ["gemini", "gemini-cli"],
@@ -325,7 +373,7 @@ class GeminiProvider(BaseProvider):
 
         now_ts = current_timestamp()
         event_type = "activity_updated"
-        phase = "running"
+        phase = "completed"
         title = ""
         summary = ""
         last_message_preview = ""
@@ -482,3 +530,16 @@ def _extract_model_from_mapping(candidate: Any) -> str | None:
                 return model
 
     return None
+
+
+def _session_updated_at(payload: dict[str, Any], transcript_path: Path) -> int:
+    last_updated = payload.get("lastUpdated")
+    if last_updated:
+        try:
+            return int(datetime.fromisoformat(str(last_updated).replace("Z", "+00:00")).timestamp())
+        except (ValueError, TypeError):
+            pass
+    try:
+        return int(transcript_path.stat().st_mtime)
+    except OSError:
+        return current_timestamp()

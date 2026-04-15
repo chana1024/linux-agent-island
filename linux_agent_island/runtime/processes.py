@@ -37,15 +37,20 @@ logger = logging.getLogger(__name__)
 
 
 def process_provider(info: ProcessInfo) -> str | None:
+    provider, _confidence = process_provider_with_confidence(info)
+    return provider
+
+
+def process_provider_with_confidence(info: ProcessInfo) -> tuple[str | None, int]:
     config = AppConfig.default()
     for provider in get_all_providers(config):
         sigs = provider.get_process_signatures()
         if info.command in sigs.get("commands", []):
-            return provider.name
+            return provider.name, 2
         for pattern in sigs.get("arg_patterns", []):
             if pattern in info.args:
-                return provider.name
-    return None
+                return provider.name, 1
+    return None, 0
 
 
 class SessionProcessInspector:
@@ -184,16 +189,37 @@ class SessionProcessInspector:
         log_commands: bool = False,
     ) -> list[AgentProcessInfo]:
         agent_processes: list[AgentProcessInfo] = []
+        dedup_index: dict[tuple[str, str | None, str | None], tuple[int, int]] = {}
         for info in tree.values():
-            provider = process_provider(info)
+            provider, confidence = process_provider_with_confidence(info)
             if provider is None:
                 continue
+            cwd = self.process_cwd(info.pid, log_commands=log_commands)
+            dedup_key = (provider, info.tty, cwd)
+            existing = dedup_index.get(dedup_key)
+            if existing is not None:
+                existing_confidence, existing_index = existing
+                # Prefer direct command matches over broad arg pattern matches.
+                # When confidence ties, keep the older PID for stability.
+                if confidence < existing_confidence:
+                    continue
+                if confidence == existing_confidence and info.pid >= agent_processes[existing_index].pid:
+                    continue
+                agent_processes[existing_index] = AgentProcessInfo(
+                    provider=provider,
+                    pid=info.pid,
+                    tty=info.tty,
+                    cwd=cwd,
+                )
+                dedup_index[dedup_key] = (confidence, existing_index)
+                continue
+            dedup_index[dedup_key] = (confidence, len(agent_processes))
             agent_processes.append(
                 AgentProcessInfo(
                     provider=provider,
                     pid=info.pid,
                     tty=info.tty,
-                    cwd=self.process_cwd(info.pid, log_commands=log_commands),
+                    cwd=cwd,
                 )
             )
         return agent_processes
