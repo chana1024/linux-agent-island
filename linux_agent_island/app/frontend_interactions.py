@@ -38,14 +38,29 @@ class FrontendInteractionsMixin:
             self._schedule_scroll_to_selected_session()
             return self.selected_session_key is not None
 
+        previous_selected_key = self.selected_session_key
         self.selected_session_key = moved_selection_key(
             self.selected_session_key,
             self.panel_session_keys,
             delta,
         )
-        self._render()
+        if self.selected_session_key != previous_selected_key:
+            self._update_selected_row_css(previous_selected_key, self.selected_session_key)
         self._schedule_scroll_to_selected_session()
         return self.selected_session_key is not None
+
+    def _update_selected_row_css(self, previous: SessionKey | None, current: SessionKey | None) -> None:
+        previous_row = self.session_row_widgets.get(previous) if previous is not None else None
+        if previous_row is not None:
+            previous_row.remove_css_class("session-card-selected")
+
+        current_row = self.session_row_widgets.get(current) if current is not None else None
+        if current is not None and current_row is None:
+            # Fallback for edge cases where the list was rebuilt between key events.
+            self._render()
+            return
+        if current_row is not None:
+            current_row.add_css_class("session-card-selected")
 
     def _expand_one_layer(self) -> bool:
         if not self.expanded:
@@ -351,7 +366,21 @@ class FrontendInteractionsMixin:
             target += float(child.get_allocated_height()) + spacing
             child = child.get_next_sibling()
 
-        target = max(0.0, target - 12.0)
+        row_top = target
+        row_bottom = row_top + float(row.get_allocated_height())
+        viewport_top = adjustment.get_value()
+        viewport_bottom = viewport_top + adjustment.get_page_size()
+        margin = 12.0
+
+        if row_top >= viewport_top + margin and row_bottom <= viewport_bottom - margin:
+            return False
+
+        if row_top < viewport_top + margin:
+            target = row_top - margin
+        else:
+            target = row_bottom - adjustment.get_page_size() + margin
+
+        target = max(0.0, target)
         max_value = max(0.0, adjustment.get_upper() - adjustment.get_page_size())
         adjustment.set_value(min(target, max_value))
         return False

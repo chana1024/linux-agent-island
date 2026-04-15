@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 
 import gi
 
@@ -16,8 +17,16 @@ from gi.repository import Gdk, Gtk
 
 from .frontend_presenter import compute_window_position_for_width, parse_workarea_top_offset
 
+_TOP_BAR_OFFSET_CACHE_TTL_SECONDS = 1.0
+_top_bar_offset_cache_value = 0
+_top_bar_offset_cache_ts = 0.0
+
 
 def top_bar_offset() -> int:
+    global _top_bar_offset_cache_value, _top_bar_offset_cache_ts
+    now = time.monotonic()
+    if now - _top_bar_offset_cache_ts < _TOP_BAR_OFFSET_CACHE_TTL_SECONDS:
+        return _top_bar_offset_cache_value
     try:
         result = subprocess.run(
             ["xprop", "-root", "_NET_WORKAREA"],
@@ -27,9 +36,13 @@ def top_bar_offset() -> int:
             check=False,
         )
     except OSError:
+        _top_bar_offset_cache_value = 0
+        _top_bar_offset_cache_ts = now
         return 0
     output = result.stdout.strip() or result.stderr.strip()
-    return parse_workarea_top_offset(output)
+    _top_bar_offset_cache_value = parse_workarea_top_offset(output)
+    _top_bar_offset_cache_ts = now
+    return _top_bar_offset_cache_value
 
 
 def max_window_height_for_monitor(window: Gtk.ApplicationWindow | None, top_bar_gap: int) -> int:
