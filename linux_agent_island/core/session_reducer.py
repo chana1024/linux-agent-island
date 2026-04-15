@@ -33,6 +33,9 @@ def restore_session(current: AgentSession | None, event: AgentEvent) -> AgentSes
             if event.identity_confirmed_by_hook is not None
             else (current.identity_confirmed_by_hook if current else False)
         ),
+        process_anchor=current.process_anchor if current else False,
+        synthetic_session=current.synthetic_session if current else False,
+        provider_stale=current.provider_stale if current else False,
         is_session_ended=event.is_session_end if event.is_session_end is not None else (current.is_session_ended if current else False),
         is_process_alive=event.is_process_alive if event.is_process_alive is not None else (current.is_process_alive if current else False),
         process_not_seen_count=(
@@ -69,6 +72,9 @@ def build_base_session(current: AgentSession | None, event: AgentEvent) -> Agent
         tty=event.tty,
         is_hook_managed=bool(event.is_hook_managed),
         identity_confirmed_by_hook=bool(event.identity_confirmed_by_hook),
+        process_anchor=False,
+        synthetic_session=False,
+        provider_stale=False,
         is_process_alive=True,
         process_not_seen_count=0,
         last_message_preview=event.last_message_preview,

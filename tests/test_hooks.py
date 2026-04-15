@@ -25,7 +25,7 @@ def test_codex_hook_event_captures_pid_and_tty(monkeypatch) -> None:
 
     assert event["pid"] == 4321
     assert event["tty"] == "/dev/pts/7"
-    assert event["phase"] == "running"
+    assert event["phase"] == "completed"
     assert event["event_type"] == "session_started"
     assert event["event_source"] == "SessionStart"
 

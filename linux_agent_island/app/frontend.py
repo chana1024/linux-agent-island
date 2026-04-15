@@ -115,6 +115,24 @@ window {
   padding: 2px 7px;
 }
 
+.tag-provider-gemini {
+  background: rgba(138, 162, 255, 0.15);
+  border: 1px solid rgba(138, 162, 255, 0.3);
+  color: #8aa2ff;
+}
+
+.tag-provider-claude {
+  background: rgba(217, 119, 87, 0.15);
+  border: 1px solid rgba(217, 119, 87, 0.3);
+  color: #d97757;
+}
+
+.tag-provider-codex {
+  background: rgba(61, 220, 132, 0.15);
+  border: 1px solid rgba(61, 220, 132, 0.3);
+  color: #3ddc84;
+}
+
 .title {
   color: #ffffff;
   font-weight: 700;

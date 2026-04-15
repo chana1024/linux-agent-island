@@ -188,6 +188,9 @@ class AgentSession:
     is_focused: bool = False
     is_hook_managed: bool = False
     identity_confirmed_by_hook: bool = False
+    process_anchor: bool = False
+    synthetic_session: bool = False
+    provider_stale: bool = False
     is_session_ended: bool = False
     is_process_alive: bool = False
     process_not_seen_count: int = 0
@@ -245,6 +248,9 @@ class AgentSession:
             is_focused=bool(payload.get("is_focused", False)),
             is_hook_managed=bool(payload.get("is_hook_managed", False)),
             identity_confirmed_by_hook=bool(payload.get("identity_confirmed_by_hook", False)),
+            process_anchor=bool(payload.get("process_anchor", False)),
+            synthetic_session=bool(payload.get("synthetic_session", False)),
+            provider_stale=bool(payload.get("provider_stale", False)),
             is_session_ended=bool(payload.get("is_session_ended", False)),
             is_process_alive=bool(payload.get("is_process_alive", False)),
             process_not_seen_count=int(payload.get("process_not_seen_count", 0)),

@@ -291,8 +291,12 @@ class FrontendInteractionsMixin:
         if not self.highlighted_until:
             return
 
+        expiring_values = [v for v in self.highlighted_until.values() if v > 0]
+        if not expiring_values:
+            return
+
         now_ts = int(time.time())
-        next_expiry = min(self.highlighted_until.values())
+        next_expiry = min(expiring_values)
         delay_ms = max(1000, (next_expiry - now_ts) * 1000)
         self.highlight_timeout_id = GLib.timeout_add(delay_ms, self._expire_highlights)
 
