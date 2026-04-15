@@ -27,6 +27,7 @@ def test_codex_hook_event_captures_pid_and_tty(monkeypatch) -> None:
     assert event["tty"] == "/dev/pts/7"
     assert event["phase"] == "running"
     assert event["event_type"] == "session_started"
+    assert event["event_source"] == "SessionStart"
 
 
 def test_codex_stop_hook_maps_to_waiting_with_message(monkeypatch) -> None:
@@ -52,6 +53,7 @@ def test_codex_stop_hook_maps_to_waiting_with_message(monkeypatch) -> None:
     assert event["title"] == ""
     assert event["last_message_preview"] == "done"
     assert event["event_type"] == "session_completed"
+    assert event["event_source"] == "Stop"
 
 
 def test_codex_user_prompt_hook_uses_latest_prompt_as_title(monkeypatch) -> None:
@@ -74,6 +76,7 @@ def test_codex_user_prompt_hook_uses_latest_prompt_as_title(monkeypatch) -> None
     assert event["title"] == "latest prompt"
     assert event["phase"] == "running"
     assert event["event_type"] == "activity_updated"
+    assert event["event_source"] == "UserPromptSubmit"
     assert event["started_at"] == event["updated_at"]
 
 
@@ -190,6 +193,8 @@ def test_claude_notification_hook_does_not_reset_title(monkeypatch) -> None:
 
     assert event["title"] == ""
     assert event["last_message_preview"] == "assistant message"
+    assert event["event_type"] == "question_asked"
+    assert event["question_prompt"]["title"] == "assistant message"
 
 
 def test_claude_user_prompt_hook_uses_latest_prompt_as_title(monkeypatch) -> None:
@@ -275,6 +280,28 @@ def test_gemini_tool_permission_notification_requires_attention(monkeypatch) -> 
 
     assert event["phase"] == "waiting_approval"
     assert event["last_message_preview"] == "permission needed"
+    assert event["event_type"] == "permission_requested"
+    assert event["permission_request"]["summary"] == "permission needed"
+
+
+def test_gemini_notification_hook_maps_non_permission_to_waiting_answer(monkeypatch) -> None:
+    monkeypatch.setattr(hooks.os, "getppid", lambda: 4321)
+    monkeypatch.setattr(hooks.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no ps")))
+    monkeypatch.setattr(hooks, "_detect_tty_from_streams", lambda: None)
+
+    event = hooks._build_gemini_event(  # noqa: SLF001
+        "Notification",
+        {
+            "session_id": "gemini-1",
+            "cwd": "/tmp/demo",
+            "notification_type": "Question",
+            "message": "need input",
+        },
+    )
+
+    assert event["phase"] == "waiting_answer"
+    assert event["event_type"] == "question_asked"
+    assert event["question_prompt"]["title"] == "need input"
 
 
 def test_gemini_session_end_hook_marks_session_end(monkeypatch) -> None:

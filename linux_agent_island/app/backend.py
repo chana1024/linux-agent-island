@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 class BackendService:
     def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or AppConfig.default()
+        self.providers = get_all_providers(self.config)
         self.store = SessionStore()
         self.session_cache = SessionCache(self.config.session_cache_path)
         self.process_inspector = SessionProcessInspector()
@@ -100,16 +101,14 @@ class BackendService:
         self.stop()
 
     def _install_hooks(self) -> None:
-        for provider in get_all_providers(self.config):
+        for provider in self.providers:
             provider.install_hooks()
 
     def _reload_provider_state(self) -> None:
         cached_sessions = self.session_cache.load()
-        providers = get_all_providers(self.config)
+        self.store.restore_sessions(filter_cached_sessions_for_restore(cached_sessions, self.providers))
 
-        self.store.restore_sessions(filter_cached_sessions_for_restore(cached_sessions, providers))
-
-        for provider in providers:
+        for provider in self.providers:
             live_sessions = provider.load_sessions()
             if live_sessions:
                 self.store.restore_sessions(live_sessions)
@@ -245,10 +244,20 @@ class BackendService:
 
     def _reconcile_sessions(self) -> bool:
         sessions = self.store.list_sessions()
+        provider_events = []
+        for provider in self.providers:
+            provider_events.extend(provider.poll_events(sessions))
+        changed = False
+        for event in provider_events:
+            self.store.apply(event)
+            changed = True
         if not sessions:
+            if changed:
+                self._persist_sessions()
+                self._emit_sessions_changed()
             return True
         matched_sessions, alive_session_keys = self.process_inspector.reconcile_sessions(sessions)
-        changed = self.store.reconcile_process_matches(matched_sessions)
+        changed = self.store.reconcile_process_matches(matched_sessions) or changed
         changed = self.store.mark_process_liveness(alive_session_keys) or changed
         changed = self.store.remove_invisible_sessions() or changed
         if changed:

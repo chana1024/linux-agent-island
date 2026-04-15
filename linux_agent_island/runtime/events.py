@@ -56,12 +56,15 @@ class EventSocketServer:
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         try:
             probe.connect(str(self.socket_path))
+            # AF_UNIX datagram sockets can sometimes accept connect() on stale
+            # paths. A tiny send verifies an actual receiver is present.
+            probe.send(b"")
         except FileNotFoundError:
             return False
         except ConnectionRefusedError:
             return False
         except OSError as exc:
-            if exc.errno in {errno.ENOENT, errno.ECONNREFUSED}:
+            if exc.errno in {errno.ENOENT, errno.ECONNREFUSED, errno.ENOTCONN, errno.EPIPE}:
                 return False
             raise RuntimeError(f"cannot probe event socket {self.socket_path}: {exc}") from exc
         finally:

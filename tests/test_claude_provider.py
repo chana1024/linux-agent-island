@@ -140,7 +140,7 @@ def test_claude_provider_maps_hook_event_to_session_update(tmp_path: Path) -> No
     assert session.provider == "claude"
     assert session.session_id == "claude-1"
     assert session.title == "demo"
-    assert session.phase is SessionPhase.WAITING
+    assert session.phase is SessionPhase.WAITING_ANSWER
     assert session.model == "sonnet"
 
 
@@ -164,6 +164,31 @@ def test_claude_provider_maps_permission_requests_to_attention_phase(tmp_path: P
     )
 
     assert session.phase is SessionPhase.WAITING_APPROVAL
+
+
+def test_claude_provider_builds_structured_permission_event(tmp_path: Path) -> None:
+    provider = ClaudeProvider(
+        settings_path=tmp_path / "settings.json",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+    )
+
+    event = provider.build_event(
+        "PermissionRequest",
+        {
+            "session_id": "claude-2",
+            "cwd": "/tmp/workspace/demo",
+            "message": "needs approval",
+            "tool_name": "Write",
+            "path": "/tmp/workspace/demo/file.txt",
+        },
+    )
+
+    assert event["event_type"] == "permission_requested"
+    assert event["permission_request"]["tool_name"] == "Write"
+    assert event["permission_request"]["affected_path"] == "/tmp/workspace/demo/file.txt"
+    assert event["metadata_kind"] == "claude"
+    assert event["claude_metadata"]["current_tool"] == "Write"
 
 
 def test_claude_provider_loads_transcript_from_project_file(tmp_path: Path) -> None:
@@ -210,6 +235,58 @@ def test_claude_provider_loads_transcript_from_project_file(tmp_path: Path) -> N
     ]
 
 
+def test_claude_provider_load_sessions_populates_claude_metadata(tmp_path: Path) -> None:
+    projects_dir = tmp_path / "projects"
+    session_dir = projects_dir / "-tmp-workspace-demo"
+    session_dir.mkdir(parents=True)
+    now_ms = int(current_timestamp() * 1000)
+    session_file = session_dir / "claude-1.jsonl"
+    session_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": now_ms - 1000,
+                        "message": {"role": "user", "content": "hello world"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": now_ms - 500,
+                        "message": {"role": "user", "content": "latest user prompt"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "status": "waiting_for_input",
+                        "timestamp": now_ms,
+                        "cwd": "/tmp/workspace/demo",
+                        "model": "sonnet",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provider = ClaudeProvider(
+        settings_path=tmp_path / "settings.json",
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+        projects_dir=projects_dir,
+    )
+
+    session = provider.load_sessions()[0]
+    assert session.claude_metadata is not None
+    assert session.claude_metadata.transcript_path == str(session_file)
+    assert session.claude_metadata.initial_user_prompt == "hello world"
+    assert session.claude_metadata.last_assistant_message == "hi"
+
+
 def test_claude_provider_loads_sessions(tmp_path: Path) -> None:
     projects_dir = tmp_path / "projects"
     session_dir = projects_dir / "-tmp-workspace-demo"
@@ -226,6 +303,13 @@ def test_claude_provider_loads_sessions(tmp_path: Path) -> None:
                         "type": "user",
                         "timestamp": now_ms - 1000,
                         "message": {"role": "user", "content": "hello world"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": now_ms - 500,
+                        "message": {"role": "user", "content": "latest user prompt"},
                     }
                 ),
                 json.dumps(
@@ -253,8 +337,11 @@ def test_claude_provider_loads_sessions(tmp_path: Path) -> None:
     session = sessions[0]
     assert session.session_id == "claude-1"
     assert session.cwd == "/tmp/workspace/demo"
-    assert session.title == "hello world"
+    assert session.title == "latest user prompt"
     assert session.is_process_alive is True
+    assert session.claude_metadata is not None
+    assert session.claude_metadata.initial_user_prompt == "hello world"
+    assert session.claude_metadata.last_user_prompt == "latest user prompt"
 
 
 def test_claude_provider_loads_sessions_with_iso_timestamp(tmp_path: Path) -> None:

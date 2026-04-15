@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
+from linux_agent_island.core.models import AgentSession, PermissionRequest, QuestionOption, QuestionPrompt, SessionOrigin, SessionPhase
 from linux_agent_island.runtime.session_cache import SessionCache
 
 
@@ -25,6 +25,15 @@ def test_session_cache_round_trips_session_metadata(tmp_path: Path) -> None:
         is_process_alive=True,
         process_not_seen_count=1,
         last_message_preview="done",
+        permission_request=PermissionRequest(
+            title="Permission required",
+            summary="allow write",
+            affected_path="/tmp/project",
+        ),
+        question_prompt=QuestionPrompt(
+            title="Need input",
+            options=[QuestionOption(label="Yes"), QuestionOption(label="No")],
+        ),
     )
 
     cache.save([session])
@@ -39,6 +48,10 @@ def test_session_cache_round_trips_session_metadata(tmp_path: Path) -> None:
     assert restored_session.is_process_alive is True
     assert restored_session.process_not_seen_count == 1
     assert restored_session.last_message_preview == "done"
+    assert restored_session.permission_request is not None
+    assert restored_session.permission_request.affected_path == "/tmp/project"
+    assert restored_session.question_prompt is not None
+    assert [option.label for option in restored_session.question_prompt.options] == ["Yes", "No"]
 
 
 def test_session_cache_returns_empty_list_for_missing_file(tmp_path: Path) -> None:
