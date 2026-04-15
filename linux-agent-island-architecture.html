@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Linux Agent Island Architecture</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #020617;
+            --card-bg: #0f172a;
+            --border-color: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --cyan-400: #22d3ee;
+            --emerald-400: #34d399;
+            --violet-400: #a78bfa;
+            --amber-400: #fbbf24;
+            --rose-400: #fb7185;
+            --orange-400: #fb923c;
+            --slate-400: #94a3b8;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            width: 100%;
+            max-width: 1000px;
+        }
+
+        .title-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+
+        .pulse-dot {
+            width: 12px;
+            height: 12px;
+            background-color: var(--emerald-400);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--emerald-400);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.7; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.7; }
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; font-weight: 700; }
+        .subtitle { color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.5rem; }
+
+        .diagram-container {
+            background-color: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 1000px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+
+        svg { width: 100%; height: auto; display: block; }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-top: 2rem;
+            width: 100%;
+            max-width: 1000px;
+        }
+
+        .summary-card {
+            background-color: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .summary-card h3 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .summary-card p {
+            margin: 0;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .footer {
+            margin-top: 3rem;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title-container">
+            <div class="pulse-dot"></div>
+            <h1>Linux Agent Island Architecture</h1>
+        </div>
+        <div class="subtitle">System Design Overview & Component Interactions</div>
+    </div>
+
+    <div class="diagram-container">
+        <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+            <!-- Grid Pattern -->
+            <defs>
+                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+                </pattern>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" />
+                </marker>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#grid)" />
+
+            <!-- Connection Arrows (Rendered Behind) -->
+            <!-- Agents to Hooks -->
+            <path d="M 120 130 L 240 130" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            <path d="M 120 180 L 240 180" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            <path d="M 120 230 L 240 230" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- Hooks to Socket -->
+            <path d="M 360 180 L 420 180" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- Socket to Backend -->
+            <path d="M 460 180 L 520 180" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- Backend to DBus -->
+            <path d="M 600 210 L 600 270" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- DBus to Frontend -->
+            <path d="M 520 300 L 420 300" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- Backend to Inspector -->
+            <path d="M 680 180 L 720 180 L 720 360 L 680 360" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- Inspector to X11/Terminal -->
+            <path d="M 600 390 L 600 450" stroke="#94a3b8" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+            
+            <!-- Frontend to DBus (Jump Request) -->
+            <path d="M 340 330 L 340 480 L 520 480 L 520 330" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4" fill="none" marker-end="url(#arrowhead)" />
+
+            <!-- Boundary Boxes -->
+            <rect x="230" y="80" width="460" height="320" rx="8" fill="rgba(30, 41, 59, 0.1)" stroke="#1e293b" stroke-dasharray="5,5" />
+            <text x="240" y="100" fill="#94a3b8" font-size="9" font-weight="700">CORE RUNTIME (SYSTEMD USER SERVICE)</text>
+
+            <!-- 1. AI AGENTS (EXTERNAL) -->
+            <!-- Claude -->
+            <rect x="40" y="110" width="80" height="40" rx="6" fill="#0f172a" />
+            <rect x="40" y="110" width="80" height="40" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5" />
+            <text x="80" y="132" fill="#f8fafc" font-size="10" text-anchor="middle" font-weight="500">Claude</text>
+            <text x="80" y="142" fill="#94a3b8" font-size="7" text-anchor="middle">Code CLI</text>
+
+            <!-- Codex -->
+            <rect x="40" y="160" width="80" height="40" rx="6" fill="#0f172a" />
+            <rect x="40" y="160" width="80" height="40" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5" />
+            <text x="80" y="182" fill="#f8fafc" font-size="10" text-anchor="middle" font-weight="500">Codex</text>
+            <text x="80" y="192" fill="#94a3b8" font-size="7" text-anchor="middle">CLI</text>
+
+            <!-- Gemini -->
+            <rect x="40" y="210" width="80" height="40" rx="6" fill="#0f172a" />
+            <rect x="40" y="210" width="80" height="40" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5" />
+            <text x="80" y="232" fill="#f8fafc" font-size="10" text-anchor="middle" font-weight="500">Gemini</text>
+            <text x="80" y="242" fill="#94a3b8" font-size="7" text-anchor="middle">CLI</text>
+
+            <!-- 2. HOOK SCRIPTS (BACKEND) -->
+            <rect x="240" y="110" width="120" height="140" rx="6" fill="#0f172a" />
+            <rect x="240" y="110" width="120" height="140" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+            <text x="300" y="175" fill="#f8fafc" font-size="11" text-anchor="middle" font-weight="500">Hook Scripts</text>
+            <text x="300" y="190" fill="#34d399" font-size="8" text-anchor="middle">linux_agent_island.hooks</text>
+
+            <!-- 3. UNIX SOCKET (MESSAGE BUS) -->
+            <circle cx="440" cy="180" r="20" fill="#0f172a" />
+            <circle cx="440" cy="180" r="20" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1.5" />
+            <text x="440" y="215" fill="#fb923c" font-size="8" text-anchor="middle">Unix Socket</text>
+
+            <!-- 4. BACKEND SERVICE (BACKEND) -->
+            <rect x="520" y="110" width="160" height="100" rx="6" fill="#0f172a" />
+            <rect x="520" y="110" width="160" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+            <text x="600" y="150" fill="#f8fafc" font-size="12" text-anchor="middle" font-weight="700">Backend Service</text>
+            <text x="600" y="165" fill="#34d399" font-size="9" text-anchor="middle">Session Management</text>
+            <text x="600" y="180" fill="#34d399" font-size="9" text-anchor="middle">State Persistence</text>
+
+            <!-- 5. D-BUS (MESSAGE BUS) -->
+            <rect x="520" y="270" width="160" height="60" rx="6" fill="#0f172a" />
+            <rect x="520" y="270" width="160" height="60" rx="6" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1.5" />
+            <text x="600" y="300" fill="#f8fafc" font-size="11" text-anchor="middle" font-weight="500">D-Bus Interface</text>
+            <text x="600" y="315" fill="#fb923c" font-size="8" text-anchor="middle">com.lzn.LinuxAgentIsland</text>
+
+            <!-- 6. FRONTEND ISLAND (FRONTEND) -->
+            <rect x="260" y="270" width="160" height="60" rx="6" fill="#0f172a" />
+            <rect x="260" y="270" width="160" height="60" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5" />
+            <text x="340" y="300" fill="#f8fafc" font-size="12" text-anchor="middle" font-weight="700">GTK Island</text>
+            <text x="340" y="315" fill="#22d3ee" font-size="9" text-anchor="middle">X11 Floating UI</text>
+
+            <!-- 7. PROCESS INSPECTOR (BACKEND) -->
+            <rect x="520" y="340" width="160" height="50" rx="6" fill="#0f172a" />
+            <rect x="520" y="340" width="160" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5" />
+            <text x="600" y="365" fill="#f8fafc" font-size="10" text-anchor="middle" font-weight="500">Process Inspector</text>
+            <text x="600" y="378" fill="#34d399" font-size="8" text-anchor="middle">Liveness / Window Matching</text>
+
+            <!-- 8. SYSTEM INTEGRATIONS (EXTERNAL) -->
+            <rect x="520" y="450" width="160" height="60" rx="6" fill="#0f172a" />
+            <rect x="520" y="450" width="160" height="60" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5" />
+            <text x="600" y="480" fill="#f8fafc" font-size="11" text-anchor="middle" font-weight="500">X11 / Terminal</text>
+            <text x="600" y="495" fill="#94a3b8" font-size="8" text-anchor="middle">wmctrl / x11-utils</text>
+
+            <!-- Legend -->
+            <g transform="translate(40, 540)">
+                <rect x="0" y="0" width="12" height="12" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1" />
+                <text x="18" y="10" fill="#94a3b8" font-size="8">Frontend</text>
+                
+                <rect x="80" y="0" width="12" height="12" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1" />
+                <text x="98" y="10" fill="#94a3b8" font-size="8">Backend</text>
+
+                <rect x="160" y="0" width="12" height="12" rx="2" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1" />
+                <text x="178" y="10" fill="#94a3b8" font-size="8">Message Bus</text>
+
+                <rect x="250" y="0" width="12" height="12" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1" />
+                <text x="268" y="10" fill="#94a3b8" font-size="8">External/OS</text>
+            </g>
+        </svg>
+    </div>
+
+    <div class="summary-grid">
+        <div class="summary-card">
+            <h3>Event Driven</h3>
+            <p>Hooks installed in Gemini, Claude, and Codex CLI push real-time session events to a central backend via Unix Domain Sockets.</p>
+        </div>
+        <div class="summary-card">
+            <h3>Stateful UI</h3>
+            <p>GTK-based X11 island maintains a persistent view of all active agent sessions, communicating with the backend over D-Bus.</p>
+        </div>
+        <div class="summary-card">
+            <h3>Deep Linking</h3>
+            <p>Integrates with X11 utilities (wmctrl/x11-utils) to identify agent terminal windows and perform instant "jumps" from the dashboard.</p>
+        </div>
+    </div>
+
+    <div class="footer">
+        Generated using Cocoon-AI Architecture Diagram Skill • 2026-04-15
+    </div>
+</body>
+</html>

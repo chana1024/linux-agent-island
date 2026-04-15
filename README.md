@@ -25,6 +25,19 @@ The GIF below shows the island listing an existing session and jumping back to i
 - Hook-based ingestion for Claude/Codex/Gemini events.
 - Session restore and process reconciliation after restart.
 
+## Architecture
+
+![Linux Agent Island Architecture](docs/architecture.svg)
+
+Linux Agent Island uses a decoupled architecture for event ingestion and display:
+
+1. **Event Hooks**: Injected into Claude, Codex, and Gemini CLI to capture session lifecycle events.
+2. **Backend Service**: A `systemd --user` service that manages session state, persistence, and process liveness reconciliation.
+3. **D-Bus Interface**: Exposes state and control methods to the frontend and CLI.
+4. **GTK Frontend**: A light-weight floating "island" UI that renders session status and handles window focus jumping.
+
+For a detailed view, see the [interactive architecture diagram](linux-agent-island-architecture.html).
+
 ## Requirements
 
 Ubuntu/Debian:
