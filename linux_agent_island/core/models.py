@@ -168,6 +168,74 @@ class QuestionPrompt:
 
 
 @dataclass(slots=True)
+class CodexAccountSummary:
+    account_id: str
+    label: str
+    is_default: bool = False
+    is_active: bool = False
+    has_credentials: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CodexAccountSummary":
+        return cls(
+            account_id=str(payload.get("account_id", "")),
+            label=str(payload.get("label", "")),
+            is_default=bool(payload.get("is_default", False)),
+            is_active=bool(payload.get("is_active", False)),
+            has_credentials=bool(payload.get("has_credentials", True)),
+        )
+
+
+@dataclass(slots=True)
+class CodexAccountStatus:
+    logged_in: bool
+    auth_mode: str | None = None
+    current_account_id: str | None = None
+    current_account_label: str | None = None
+    current_account_managed: bool = False
+    device_login_in_progress: bool = False
+    switch_affects_new_sessions_only: bool = True
+    has_running_codex_sessions: bool = False
+    accounts: list[CodexAccountSummary] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["accounts"] = [account.to_dict() for account in self.accounts]
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CodexAccountStatus":
+        raw_accounts = payload.get("accounts", [])
+        accounts = [
+            CodexAccountSummary.from_dict(item)
+            for item in raw_accounts
+            if isinstance(item, dict)
+        ]
+        return cls(
+            logged_in=bool(payload.get("logged_in", False)),
+            auth_mode=str(payload["auth_mode"]) if payload.get("auth_mode") is not None else None,
+            current_account_id=(
+                str(payload["current_account_id"])
+                if payload.get("current_account_id") is not None
+                else None
+            ),
+            current_account_label=(
+                str(payload["current_account_label"])
+                if payload.get("current_account_label") is not None
+                else None
+            ),
+            current_account_managed=bool(payload.get("current_account_managed", False)),
+            device_login_in_progress=bool(payload.get("device_login_in_progress", False)),
+            switch_affects_new_sessions_only=bool(payload.get("switch_affects_new_sessions_only", True)),
+            has_running_codex_sessions=bool(payload.get("has_running_codex_sessions", False)),
+            accounts=accounts,
+        )
+
+
+@dataclass(slots=True)
 class AgentSession:
     provider: str
     session_id: str

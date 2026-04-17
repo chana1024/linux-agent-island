@@ -11,6 +11,8 @@ from .frontend_presenter import (
     SessionKey,
     collapsed_status_phase,
     compute_expanded_window_height,
+    codex_account_button_label,
+    codex_account_notice,
     expanded_header_title,
     format_session_minutes,
     has_done_time_label,
@@ -69,12 +71,7 @@ class FrontendPanelMixin:
         animate_panel = self.pending_panel_reveal
         self._set_panel_fills_window(not animate_panel)
 
-        header = Gtk.Button(label=expanded_header_title(self.sessions))
-        header.set_can_focus(False)
-        header.add_css_class("session-summary")
-        header.add_css_class("title")
-        header.connect("clicked", self._toggle_expand)
-        self.box.append(header)
+        self.box.append(self._header_row())
 
         if not self.sessions:
             empty = Gtk.Label(label="No visible sessions")
@@ -108,6 +105,96 @@ class FrontendPanelMixin:
         )
         self.box.append(self.panel_revealer)
         self.pending_panel_reveal = False
+
+    def _header_row(self) -> Gtk.Widget:
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        root.add_css_class("header-row")
+
+        header = Gtk.Button(label=expanded_header_title(self.sessions))
+        header.set_can_focus(False)
+        header.set_hexpand(True)
+        header.set_halign(Gtk.Align.FILL)
+        header.add_css_class("session-summary")
+        header.add_css_class("title")
+        header.connect("clicked", self._toggle_expand)
+        root.append(header)
+
+        account_button = Gtk.MenuButton(label=codex_account_button_label(self.codex_account_status))
+        account_button.set_can_focus(False)
+        account_button.add_css_class("account-button")
+        account_button.set_popover(self._codex_account_popover())
+        root.append(account_button)
+
+        login_button = Gtk.Button(label="Log in")
+        login_button.set_can_focus(False)
+        login_button.add_css_class("account-login-button")
+        login_button.set_sensitive(not self.codex_account_status.device_login_in_progress)
+        login_button.connect("clicked", lambda *_args: self._start_codex_device_login())
+        root.append(login_button)
+
+        return root
+
+    def _codex_account_popover(self) -> Gtk.Popover:
+        popover = Gtk.Popover()
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        content.set_margin_top(8)
+        content.set_margin_bottom(8)
+        content.set_margin_start(8)
+        content.set_margin_end(8)
+        content.add_css_class("account-menu")
+
+        title = Gtk.Label(label="Codex accounts")
+        title.set_xalign(0)
+        title.add_css_class("account-menu-title")
+        content.append(title)
+
+        notice = codex_account_notice(self.codex_account_status)
+        if notice:
+            note = Gtk.Label(label=notice)
+            note.set_xalign(0)
+            note.set_wrap(True)
+            note.add_css_class("account-note")
+            content.append(note)
+
+        for account in self.codex_account_status.accounts:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            row.add_css_class("account-row")
+            if account.is_active:
+                row.add_css_class("account-row-active")
+            elif account.is_default:
+                row.add_css_class("account-row-default")
+
+            label = Gtk.Label(label=account.label)
+            label.set_xalign(0)
+            label.set_hexpand(True)
+            row.append(label)
+
+            if account.is_default:
+                default_tag = Gtk.Label(label="Default")
+                default_tag.add_css_class("session-tag")
+                row.append(default_tag)
+
+            if account.is_active:
+                active_tag = Gtk.Label(label="Active")
+                active_tag.add_css_class("session-tag")
+                active_tag.add_css_class("tag-provider-codex")
+                row.append(active_tag)
+            else:
+                button = Gtk.Button(label="Use")
+                button.set_can_focus(False)
+                button.connect("clicked", lambda *_args, account_id=account.account_id: self._switch_codex_account(account_id))
+                row.append(button)
+
+            content.append(row)
+
+        if not self.codex_account_status.accounts:
+            empty = Gtk.Label(label="No saved Codex accounts yet")
+            empty.set_xalign(0)
+            empty.add_css_class("account-note")
+            content.append(empty)
+
+        popover.set_child(content)
+        return popover
 
     def _session_card(self, session) -> Gtk.Widget:
         key = session_key(session)

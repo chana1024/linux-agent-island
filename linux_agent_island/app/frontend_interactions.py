@@ -5,9 +5,18 @@ import time
 
 from gi.repository import GLib
 
-from ..core.models import AgentSession, SessionPhase
+from ..core.models import AgentSession, CodexAccountStatus, SessionPhase
 from .frontend_controls import REVEAL_TRANSITION_MS, TRANSCRIPT_REFRESH_MS, moved_selection_key
-from .frontend_client import fetch_session_transcript, jump_to_session
+from .frontend_client import (
+    fetch_session_transcript,
+    get_codex_account_status,
+    jump_to_session,
+    delete_codex_account_async,
+    rename_codex_account_async,
+    set_default_codex_account_async,
+    start_codex_device_login_async,
+    switch_codex_account_async,
+)
 from .frontend_presenter import (
     HIGHLIGHT_DURATION_SECONDS,
     SessionKey,
@@ -263,6 +272,52 @@ class FrontendInteractionsMixin:
 
     def _jump_to_session(self, provider: str, session_id: str) -> bool:
         return jump_to_session(self.proxy, provider, session_id)
+
+    def _refresh_codex_account_status(self) -> None:
+        self.codex_account_status = get_codex_account_status(self.proxy)
+        self._render()
+        if self.settings_window is not None and self.settings_window.get_visible():
+            self._open_settings_window()
+
+    def _start_codex_device_login(self, label: str = "") -> None:
+        logger.info("frontend requested Codex device login label=%s", label or "<auto>")
+        start_codex_device_login_async(self.proxy, label, self._on_codex_device_login_started)
+
+    def _switch_codex_account(self, account_id: str) -> None:
+        logger.info("frontend requested Codex account switch account_id=%s", account_id)
+        switch_codex_account_async(self.proxy, account_id, self._on_codex_account_status_updated)
+
+    def _rename_codex_account(self, account_id: str, label: str) -> None:
+        rename_codex_account_async(self.proxy, account_id, label, self._on_codex_account_status_updated)
+
+    def _delete_codex_account(self, account_id: str) -> None:
+        delete_codex_account_async(self.proxy, account_id, self._on_codex_account_status_updated)
+
+    def _set_default_codex_account(self, account_id: str) -> None:
+        set_default_codex_account_async(self.proxy, account_id, self._on_codex_account_status_updated)
+
+    def _on_codex_device_login_started(self, _started: bool) -> None:
+        # The backend emits CodexAccountsChanged immediately after the login flow starts,
+        # and again when the watcher imports the finished login. Avoid an extra sync D-Bus
+        # round trip on the GTK thread here.
+        logger.info("frontend received Codex device login start result started=%s", _started)
+        self._render()
+        if self.settings_window is not None and self.settings_window.get_visible():
+            self._open_settings_window()
+
+    def _on_codex_account_status_updated(self, status: CodexAccountStatus | object) -> None:
+        if isinstance(status, CodexAccountStatus) and status.logged_in:
+            self.codex_account_status = status
+            logger.info(
+                "frontend received Codex account status update logged_in=%s current_account_label=%s",
+                status.logged_in,
+                status.current_account_label or "<none>",
+            )
+        else:
+            logger.warning("frontend received empty/failed Codex account status update")
+        self._render()
+        if self.settings_window is not None and self.settings_window.get_visible():
+            self._open_settings_window()
 
     def _apply_session_update(self, sessions: list[AgentSession]) -> None:
         now_ts = int(time.time())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 
-from ..core.models import AgentSession, SessionPhase
+from ..core.models import AgentSession, CodexAccountStatus, SessionPhase
 
 
 APP_TITLE = "Linux Agent Island"
@@ -75,6 +75,24 @@ def summarize_visible_sessions(sessions: list[AgentSession]) -> str:
 
 def expanded_header_title(sessions: list[AgentSession]) -> str:
     return f"{APP_TITLE} · {summarize_visible_sessions(sessions)}"
+
+
+def codex_account_button_label(status: CodexAccountStatus) -> str:
+    if status.current_account_label:
+        return status.current_account_label
+    if status.device_login_in_progress:
+        return "Logging in..."
+    if status.logged_in:
+        return "External login"
+    return "No Codex login"
+
+
+def codex_account_notice(status: CodexAccountStatus) -> str:
+    if not status.has_running_codex_sessions:
+        return ""
+    if status.switch_affects_new_sessions_only:
+        return "Account switches affect new Codex sessions only."
+    return ""
 
 
 def status_dot_css_class(phase: SessionPhase) -> str:

@@ -4,6 +4,8 @@ import argparse
 import json
 import logging
 import signal
+import threading
+import time
 
 import gi
 
@@ -12,6 +14,7 @@ gi.require_version("GLib", "2.0")
 
 from gi.repository import Gio, GLib
 
+from ..codex_accounts import CodexAccountService
 from ..core.config import AppConfig
 from ..core.models import AgentSession
 from ..core.logging import configure_logging
@@ -44,8 +47,38 @@ INTROSPECTION_XML = """
       <arg name="provider" direction="in" type="s"/>
       <arg name="session_id" direction="in" type="s"/>
     </method>
+    <method name="ListCodexAccounts">
+      <arg name="accounts" direction="out" type="s"/>
+    </method>
+    <method name="GetCodexAccountStatus">
+      <arg name="status" direction="out" type="s"/>
+    </method>
+    <method name="StartCodexDeviceLogin">
+      <arg name="label" direction="in" type="s"/>
+      <arg name="started" direction="out" type="b"/>
+    </method>
+    <method name="SwitchCodexAccount">
+      <arg name="account_id" direction="in" type="s"/>
+      <arg name="status" direction="out" type="s"/>
+    </method>
+    <method name="RenameCodexAccount">
+      <arg name="account_id" direction="in" type="s"/>
+      <arg name="label" direction="in" type="s"/>
+      <arg name="status" direction="out" type="s"/>
+    </method>
+    <method name="DeleteCodexAccount">
+      <arg name="account_id" direction="in" type="s"/>
+      <arg name="status" direction="out" type="s"/>
+    </method>
+    <method name="SetDefaultCodexAccount">
+      <arg name="account_id" direction="in" type="s"/>
+      <arg name="status" direction="out" type="s"/>
+    </method>
     <signal name="SessionsChanged">
       <arg name="sessions" type="s"/>
+    </signal>
+    <signal name="CodexAccountsChanged">
+      <arg name="status" type="s"/>
     </signal>
   </interface>
 </node>
@@ -62,6 +95,11 @@ class BackendService:
         self.store = SessionStore()
         self.session_cache = SessionCache(self.config.session_cache_path)
         self.process_inspector = SessionProcessInspector()
+        self.codex_accounts = CodexAccountService(
+            auth_path=self.config.codex_auth_path,
+            accounts_dir=self.config.codex_accounts_dir,
+            manifest_path=self.config.codex_accounts_manifest_path,
+        )
         self.socket_server = EventSocketServer(self.config.event_socket_path, self._on_runtime_event)
         self.loop = GLib.MainLoop()
         self.node_info = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
@@ -69,6 +107,7 @@ class BackendService:
         self.connection: Gio.DBusConnection | None = None
         self.registration_id: int | None = None
         self.owner_id: int | None = None
+        self._deferred_reload_in_progress = False
 
     def start(self) -> None:
         self.config.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -84,8 +123,8 @@ class BackendService:
             None,
             None,
         )
-        # Defer heavy provider and process loading to after the loop starts
-        GLib.idle_add(self._deferred_reload_state)
+        # Defer heavy provider and process loading to a background worker after the loop starts.
+        GLib.idle_add(self._start_deferred_reload_state)
         
         signal.signal(signal.SIGINT, self._stop_signal)
         signal.signal(signal.SIGTERM, self._stop_signal)
@@ -115,11 +154,28 @@ class BackendService:
         if filtered_cached_sessions:
             self.store.restore_sessions(filtered_cached_sessions)
 
-    def _deferred_reload_state(self) -> bool:
+    def _start_deferred_reload_state(self) -> bool:
+        if self._deferred_reload_in_progress:
+            return False
+        self._deferred_reload_in_progress = True
         logger.info("deferred state reload starting")
+        threading.Thread(target=self._deferred_reload_state_worker, daemon=True).start()
+        return False
+
+    def _deferred_reload_state_worker(self) -> None:
+        started_at = time.monotonic()
+        try:
+            restored_sessions = self._collect_deferred_reload_state()
+        except Exception:
+            logger.exception("deferred state reload failed")
+            GLib.idle_add(self._finish_deferred_reload_state, None, time.monotonic() - started_at)
+            return
+        GLib.idle_add(self._finish_deferred_reload_state, restored_sessions, time.monotonic() - started_at)
+
+    def _collect_deferred_reload_state(self) -> list[AgentSession]:
         cached_sessions = self.session_cache.load()
         filtered_cached_sessions = filter_cached_sessions_for_restore(cached_sessions, self.providers)
-        
+
         provider_sessions: list[AgentSession] = []
         for provider in self.providers:
             try:
@@ -135,20 +191,38 @@ class BackendService:
             cached_sessions=filtered_cached_sessions,
             provider_sessions=provider_sessions,
         )
-        
+        return restored_sessions
+
+    def _finish_deferred_reload_state(
+        self,
+        restored_sessions: list[AgentSession] | None,
+        duration_seconds: float,
+    ) -> bool:
+        self._deferred_reload_in_progress = False
         if restored_sessions:
             self.store.restore_sessions(restored_sessions)
             self._persist_sessions()
             self._emit_sessions_changed()
-            
-        logger.info("deferred state reload finished")
+
+        logger.info(
+            "deferred state reload finished restored_sessions=%s duration_ms=%s",
+            0 if restored_sessions is None else len(restored_sessions),
+            int(duration_seconds * 1000),
+        )
+        self._emit_codex_accounts_changed()
         return False  # Run only once
 
     def _reload_provider_state(self) -> None:
-        # Keeping this for backward compatibility or direct calls if needed, 
+        # Keeping this for backward compatibility or direct calls if needed,
         # though start() now uses the split phases.
         self._fast_load_cache()
-        self._deferred_reload_state()
+        started_at = time.monotonic()
+        try:
+            restored_sessions = self._collect_deferred_reload_state()
+        except Exception:
+            logger.exception("provider state reload failed")
+            restored_sessions = None
+        self._finish_deferred_reload_state(restored_sessions, time.monotonic() - started_at)
 
     def _on_runtime_event(self, payload: dict[str, object]) -> None:
         event = AgentEvent.from_payload(payload)
@@ -196,6 +270,7 @@ class BackendService:
             None,
         )
         self._emit_sessions_changed()
+        self._emit_codex_accounts_changed()
 
     def _handle_method_call(
         self,
@@ -255,6 +330,68 @@ class BackendService:
             self._emit_sessions_changed()
             invocation.return_value(None)
             return
+        if method_name == "ListCodexAccounts":
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_codex_accounts(),)))
+            return
+        if method_name == "GetCodexAccountStatus":
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_codex_account_status(),)))
+            return
+        if method_name == "StartCodexDeviceLogin":
+            label = parameters.unpack()[0]
+            logger.info("StartCodexDeviceLogin requested label=%s", label or "<auto>")
+            try:
+                started = self.codex_accounts.start_device_login(label, on_complete=self._on_codex_login_complete)
+            except Exception as exc:
+                logger.exception("StartCodexDeviceLogin failed label=%s", label or "<auto>")
+                invocation.return_dbus_error("com.lzn.LinuxAgentIsland.Error", str(exc))
+                return
+            self._emit_codex_accounts_changed()
+            logger.info("StartCodexDeviceLogin finished started=%s label=%s", started, label or "<auto>")
+            invocation.return_value(GLib.Variant("(b)", (started,)))
+            return
+        if method_name == "SwitchCodexAccount":
+            account_id = parameters.unpack()[0]
+            logger.info("SwitchCodexAccount requested account_id=%s", account_id)
+            try:
+                self.codex_accounts.switch_account(account_id)
+            except ValueError as exc:
+                logger.warning("SwitchCodexAccount rejected account_id=%s error=%s", account_id, exc)
+                invocation.return_dbus_error("com.lzn.LinuxAgentIsland.Error", str(exc))
+                return
+            self._emit_codex_accounts_changed()
+            logger.info("SwitchCodexAccount finished account_id=%s", account_id)
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_codex_account_status(),)))
+            return
+        if method_name == "RenameCodexAccount":
+            account_id, label = parameters.unpack()
+            try:
+                self.codex_accounts.rename_account(account_id, label)
+            except ValueError as exc:
+                invocation.return_dbus_error("com.lzn.LinuxAgentIsland.Error", str(exc))
+                return
+            self._emit_codex_accounts_changed()
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_codex_account_status(),)))
+            return
+        if method_name == "DeleteCodexAccount":
+            account_id = parameters.unpack()[0]
+            try:
+                self.codex_accounts.delete_account(account_id)
+            except ValueError as exc:
+                invocation.return_dbus_error("com.lzn.LinuxAgentIsland.Error", str(exc))
+                return
+            self._emit_codex_accounts_changed()
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_codex_account_status(),)))
+            return
+        if method_name == "SetDefaultCodexAccount":
+            account_id = parameters.unpack()[0]
+            try:
+                self.codex_accounts.set_default_account(account_id)
+            except ValueError as exc:
+                invocation.return_dbus_error("com.lzn.LinuxAgentIsland.Error", str(exc))
+                return
+            self._emit_codex_accounts_changed()
+            invocation.return_value(GLib.Variant("(s)", (self._serialize_codex_account_status(),)))
+            return
         invocation.return_dbus_error(
             "com.lzn.LinuxAgentIsland.Error",
             f"Unknown method: {method_name}",
@@ -277,6 +414,14 @@ class BackendService:
 
         return json.dumps(provider.load_transcript(session_id, **kwargs))
 
+    def _serialize_codex_accounts(self) -> str:
+        return json.dumps([account.to_dict() for account in self.codex_accounts.list_accounts()])
+
+    def _serialize_codex_account_status(self) -> str:
+        return json.dumps(
+            self.codex_accounts.get_status(self.store.list_sessions()).to_dict()
+        )
+
     def _reconcile_sessions(self) -> bool:
         sessions = self.store.list_sessions()
         provider_events = []
@@ -298,6 +443,7 @@ class BackendService:
         if changed:
             self._persist_sessions()
             self._emit_sessions_changed()
+            self._emit_codex_accounts_changed()
         return True
 
     def _persist_sessions(self) -> None:
@@ -313,6 +459,21 @@ class BackendService:
             "SessionsChanged",
             GLib.Variant("(s)", (self._serialize_sessions(),)),
         )
+
+    def _emit_codex_accounts_changed(self) -> None:
+        if self.connection is None:
+            return
+        self.connection.emit_signal(
+            None,
+            self.config.dbus_path,
+            self.config.dbus_name,
+            "CodexAccountsChanged",
+            GLib.Variant("(s)", (self._serialize_codex_account_status(),)),
+        )
+
+    def _on_codex_login_complete(self, _success: bool) -> None:
+        logger.info("Codex device login completion callback success=%s", _success)
+        GLib.idle_add(self._emit_codex_accounts_changed)
 
 
 def main(argv: list[str] | None = None) -> int:

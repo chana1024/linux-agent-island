@@ -70,7 +70,10 @@ class AppConfig:
     runtime_dir: Path
     session_cache_path: Path
     frontend_settings_path: Path
+    codex_accounts_dir: Path
+    codex_accounts_manifest_path: Path
     claude_settings_path: Path
+    codex_auth_path: Path
     codex_state_db_path: Path
     codex_history_path: Path
     codex_hooks_path: Path
@@ -98,7 +101,10 @@ class AppConfig:
             runtime_dir=runtime_dir,
             session_cache_path=runtime_dir / "sessions.json",
             frontend_settings_path=config_dir / "settings.json",
+            codex_accounts_dir=config_dir / "codex-accounts",
+            codex_accounts_manifest_path=config_dir / "codex-accounts" / "accounts.json",
             claude_settings_path=Path.home() / ".claude" / "settings.json",
+            codex_auth_path=Path.home() / ".codex" / "auth.json",
             codex_state_db_path=Path.home() / ".codex" / "state_5.sqlite",
             codex_history_path=Path.home() / ".codex" / "history.jsonl",
             codex_hooks_path=Path.home() / ".codex" / "hooks.json",

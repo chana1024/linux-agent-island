@@ -16,8 +16,8 @@ from gi.repository import Gdk, Gio, GLib, Gtk
 
 from ..core.config import AppConfig, FrontendSettings, load_frontend_settings
 from ..core.logging import configure_logging
-from ..core.models import AgentSession, SessionPhase
-from .frontend_client import connect_proxy, list_sessions
+from ..core.models import AgentSession, CodexAccountStatus, SessionPhase
+from .frontend_client import connect_proxy, get_codex_account_status, list_sessions
 from .frontend_controls import (
     REVEAL_START_DELAY_MS,
     REVEAL_TRANSITION_MS,
@@ -41,6 +41,8 @@ from .frontend_presenter import (
     compute_expanded_window_height,
     compute_window_position,
     compute_window_position_for_width,
+    codex_account_button_label,
+    codex_account_notice,
     detect_completed_sessions,
     expanded_header_title,
     format_session_minutes,
@@ -75,6 +77,56 @@ window {
 .pill {
   min-width: 180px;
   min-height: 34px;
+}
+
+.header-row {
+  min-height: 34px;
+}
+
+.account-button {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.account-login-button {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.account-menu {
+  background: rgba(18, 18, 22, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.account-menu-title {
+  color: #9ec4ff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.account-row {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.account-row-active {
+  border: 1px solid rgba(61, 220, 132, 0.5);
+}
+
+.account-row-default {
+  border: 1px solid rgba(158, 196, 255, 0.35);
+}
+
+.account-entry {
+  min-width: 150px;
+}
+
+.account-note {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11px;
 }
 
 .session-card {
@@ -275,6 +327,7 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         self.highlight_timeout_id: int | None = None
         self.proxy: Gio.DBusProxy | None = None
         self.settings = FrontendSettings()
+        self.codex_account_status = CodexAccountStatus(logged_in=False)
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
@@ -349,19 +402,30 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         self.proxy = connect_proxy(self.config)
         self.proxy.connect("g-signal", self._on_signal)
         self.sessions = list_sessions(self.proxy)
+        self.codex_account_status = get_codex_account_status(self.proxy)
         self.previous_session_phases = {
             session_key(session): session.phase
             for session in self.sessions
         }
 
     def _on_signal(self, _proxy: Gio.DBusProxy, _sender: str, signal_name: str, parameters: GLib.Variant) -> None:
-        if signal_name != "SessionsChanged":
+        if signal_name == "SessionsChanged":
+            sessions_json = parameters.unpack()[0]
+            self._apply_session_update([AgentSession.from_dict(item) for item in json.loads(sessions_json)])
+            self.codex_account_status = get_codex_account_status(self.proxy)
+            self._render()
+            self._schedule_position_window()
+            self._schedule_scroll_to_pending_session()
             return
-        sessions_json = parameters.unpack()[0]
-        self._apply_session_update([AgentSession.from_dict(item) for item in json.loads(sessions_json)])
-        self._render()
-        self._schedule_position_window()
-        self._schedule_scroll_to_pending_session()
+        if signal_name == "CodexAccountsChanged":
+            payload = parameters.unpack()[0]
+            try:
+                self.codex_account_status = CodexAccountStatus.from_dict(json.loads(payload))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                self.codex_account_status = get_codex_account_status(self.proxy)
+            self._render()
+            if self.settings_window is not None and self.settings_window.get_visible():
+                self._open_settings_window()
 
     def _on_key_pressed(
         self,

@@ -16,6 +16,9 @@ def test_default_config_uses_codex_hook_copy_under_home(tmp_path: Path, monkeypa
 
     config = AppConfig.default(root=project_root)
 
+    assert config.codex_accounts_dir == home / ".config" / "linux-agent-island" / "codex-accounts"
+    assert config.codex_accounts_manifest_path == config.codex_accounts_dir / "accounts.json"
+    assert config.codex_auth_path == home / ".codex" / "auth.json"
     assert config.codex_hook_script_path == home / ".codex" / "hook" / "codex-hook.py"
     assert config.gemini_settings_path == home / ".gemini" / "settings.json"
     assert config.gemini_tmp_dir == home / ".gemini" / "tmp"

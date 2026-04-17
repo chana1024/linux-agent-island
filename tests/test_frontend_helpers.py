@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from linux_agent_island.frontend import (
+    CodexAccountStatus,
     FrontendApp,
     Gdk,
     HIGHLIGHT_DURATION_SECONDS,
@@ -9,6 +10,8 @@ from linux_agent_island.frontend import (
     compute_expanded_window_height,
     compute_window_position,
     compute_window_position_for_width,
+    codex_account_button_label,
+    codex_account_notice,
     detect_completed_sessions,
     expanded_header_title,
     format_session_minutes,
@@ -164,6 +167,20 @@ def test_expanded_header_title_includes_app_name_and_visible_session_count() -> 
     ]
 
     assert expanded_header_title(sessions) == "Linux Agent Island · 1 session"
+
+
+def test_codex_account_button_label_prefers_active_label() -> None:
+    status = CodexAccountStatus(logged_in=True, current_account_label="Work")
+    assert codex_account_button_label(status) == "Work"
+
+
+def test_codex_account_notice_mentions_new_session_scope_when_running() -> None:
+    status = CodexAccountStatus(
+        logged_in=True,
+        has_running_codex_sessions=True,
+        switch_affects_new_sessions_only=True,
+    )
+    assert codex_account_notice(status) == "Account switches affect new Codex sessions only."
 
 
 def test_panel_sessions_returns_all_visible_sessions_without_truncation() -> None:
