@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Auto-expand, scroll to, and temporarily highlight sessions that transition from running to completed in the Linux Agent Island island.
+**Goal:** Focus, auto-expand, scroll to, and temporarily highlight sessions that transition from running to completed in the Linux Agent Island island.
 
-**Architecture:** Keep all behavior in the GTK frontend. Add pure helper functions for completion detection and highlight expiry, then connect those helpers to the existing `ListSessions` and `SessionsChanged` update flow. Use a frontend-only timeout map plus a pending scroll target so the UI can reveal the latest completed session without backend changes.
+**Architecture:** Keep all behavior in the GTK frontend. Add pure helper functions for completion detection and highlight expiry, then connect those helpers to the existing `ListSessions` and `SessionsChanged` update flow. Use a frontend-only timeout map plus a pending scroll target so the UI can reveal the latest completed session without backend changes, and activate the island window when completion is detected.
 
 **Tech Stack:** Python, GTK4, GLib, pytest
 

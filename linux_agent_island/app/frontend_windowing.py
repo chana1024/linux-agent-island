@@ -123,6 +123,34 @@ def set_x11_above_state(xid: int) -> None:
         pass
 
 
+def activate_x11_window(xid: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-i", "-a", hex(xid)],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def focus_window(window: Gtk.ApplicationWindow | None) -> bool:
+    if window is None:
+        return False
+    window.present()
+    surface = window.get_surface()
+    if surface is None:
+        return False
+    if GdkX11 is not None and isinstance(surface, GdkX11.X11Surface):
+        xid = surface.get_xid()
+        set_x11_above_state(xid)
+        return activate_x11_window(xid)
+    return True
+
+
 def apply_window_state(window: Gtk.ApplicationWindow | None) -> bool:
     if window is None:
         return False

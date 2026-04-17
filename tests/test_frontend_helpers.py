@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from linux_agent_island.frontend import (
     FrontendApp,
     Gdk,
@@ -28,6 +30,7 @@ from linux_agent_island.frontend import (
     window_width_for_state,
 )
 from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
+from linux_agent_island.app import frontend_windowing
 
 
 def build_session(
@@ -525,3 +528,65 @@ def test_format_running_session_minutes_uses_started_at() -> None:
     )
 
     assert format_session_minutes(session, now_ts=220) == "2m"
+
+
+def test_focus_window_activates_x11_surface(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class FakeSurface:
+        def get_xid(self) -> int:
+            return 0x03E00007
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.present_count = 0
+
+        def present(self) -> None:
+            self.present_count += 1
+
+        def get_surface(self) -> FakeSurface:
+            return FakeSurface()
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(frontend_windowing, "GdkX11", SimpleNamespace(X11Surface=FakeSurface))
+    monkeypatch.setattr(frontend_windowing, "set_x11_above_state", lambda xid: calls.append(("above", xid)))
+    monkeypatch.setattr(frontend_windowing.subprocess, "run", fake_run)
+
+    window = FakeWindow()
+
+    assert frontend_windowing.focus_window(window) is True
+    assert window.present_count == 1
+    assert calls == [
+        ("above", 0x03E00007),
+        ["wmctrl", "-i", "-a", "0x3e00007"],
+    ]
+
+
+def test_apply_session_update_focuses_island_on_completed_transition(monkeypatch) -> None:
+    app = FrontendApp()
+    app.window = object()
+    app.previous_session_phases = {("codex", "done"): SessionPhase.RUNNING}
+
+    focus_calls: list[object] = []
+    apply_window_state_calls: list[bool] = []
+
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.focus_window",
+        lambda window: focus_calls.append(window) or True,
+    )
+    monkeypatch.setattr(app, "_schedule_apply_window_state", lambda: apply_window_state_calls.append(True))
+    monkeypatch.setattr(app, "_schedule_highlight_cleanup", lambda: None)
+    monkeypatch.setattr(app, "_schedule_transcript_refresh", lambda: None)
+
+    app._apply_session_update(
+        [build_session("done", phase=SessionPhase.COMPLETED, updated_at=50, completed_at=50)]
+    )
+
+    assert focus_calls == [app.window]
+    assert apply_window_state_calls == [True]
+    assert app.expanded is True
+    assert app.pending_panel_reveal is True
+    assert app.pending_scroll_session == ("codex", "done")

@@ -37,7 +37,12 @@ def _looks_like_managed_legacy_command(command: object, event_name: str, script_
         return False
     if not command.endswith(f"{script_name} {event_name}"):
         return False
-    return "linux-agent-island" in command or f".claude/{script_name}" in command
+    legacy_markers = (
+        "linux-agent-island",
+        "claude-island",
+        f".claude/{script_name}",
+    )
+    return any(marker in command for marker in legacy_markers)
 
 
 def _looks_like_managed_module_command(command: object, provider: str, event_name: str) -> bool:
@@ -80,6 +85,9 @@ class ClaudeProvider(BaseProvider):
     def install_hooks(self) -> None:
         payload = self._load_settings()
         hooks = payload.setdefault("hooks", {})
+        if not isinstance(hooks, dict):
+            hooks = {}
+            payload["hooks"] = hooks
         for event in HOOK_EVENTS:
             hooks[event] = self._merge_hook_entries(hooks.get(event, []), event)
         self._write_settings(payload)

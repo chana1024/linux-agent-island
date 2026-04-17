@@ -16,6 +16,7 @@ from .frontend_presenter import (
     refresh_completion_highlights,
     session_key,
 )
+from .frontend_windowing import focus_window
 
 
 logger = logging.getLogger(__name__)
@@ -275,7 +276,8 @@ class FrontendInteractionsMixin:
                 now_ts=now_ts,
             )
             if self.window is not None:
-                self.window.present()
+                focused = focus_window(self.window)
+                logger.info("completed session focus requested success=%s", focused)
                 self._schedule_apply_window_state()
             if not self.expanded:
                 self.expanded = True

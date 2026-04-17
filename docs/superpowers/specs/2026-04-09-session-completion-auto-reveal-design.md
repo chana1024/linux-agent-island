@@ -8,12 +8,12 @@ When a visible session transitions from `running` to `completed`, automatically 
 
 Implement the behavior entirely in `linux_agent_island/app/frontend.py`. The GTK frontend already receives the full session list through `ListSessions` and `SessionsChanged`, so it can compare the previous and current phases locally without changing the backend or D-Bus payloads.
 
-The frontend will keep three pieces of transient UI state: the last known phase per session, highlight expiration timestamps per session, and the latest completed session that still needs to be scrolled into view. When a `running -> completed` transition is detected, the frontend will expand the island if needed, scroll to the newest completed session, and apply a temporary highlight style to every newly completed session.
+The frontend will keep three pieces of transient UI state: the last known phase per session, highlight expiration timestamps per session, and the latest completed session that still needs to be scrolled into view. When a `running -> completed` transition is detected, the frontend will activate the island window, expand it if needed, scroll to the newest completed session, and apply a temporary highlight style to every newly completed session.
 
 ## Scope
 
 - Detect only real `running -> completed` transitions.
-- Auto-expand the island when it is collapsed, without stealing focus.
+- Activate and focus the island when a session completes.
 - Scroll to the newest completed session when one or more sessions complete.
 - Keep completed sessions highlighted for five minutes, or clear the highlight immediately when the user clicks that session card.
 - Preserve existing per-session detail expansion behavior.

@@ -118,6 +118,51 @@ def test_claude_provider_replaces_old_module_hook_prefix(tmp_path: Path) -> None
     assert "echo existing" in stop_commands
 
 
+def test_claude_provider_removes_old_claude_island_legacy_hook_path(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    old_command = (
+        "/usr/bin/python3 "
+        "/home/lzn/.openclaw/workspace/coder-space/claude-island/linux-agent-shell/bin/claude-hook.py Stop"
+    )
+    settings_path.write_text(
+        json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": old_command}]}]}}),
+        encoding="utf-8",
+    )
+
+    provider = ClaudeProvider(
+        settings_path=settings_path,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+    )
+
+    provider.install_hooks()
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    stop_commands = [
+        hook["command"]
+        for entry in payload["hooks"]["Stop"]
+        for hook in entry["hooks"]
+    ]
+
+    assert old_command not in stop_commands
+    assert "/venv/bin/python -m linux_agent_island.hooks claude Stop" in stop_commands
+
+
+def test_claude_provider_install_hooks_handles_non_dict_hooks_section(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"hooks": []}), encoding="utf-8")
+    provider = ClaudeProvider(
+        settings_path=settings_path,
+        hook_command_prefix="/venv/bin/python -m linux_agent_island.hooks",
+        socket_path=tmp_path / "events.sock",
+    )
+
+    provider.install_hooks()
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert isinstance(payload.get("hooks"), dict)
+    assert "SessionStart" in payload["hooks"]
+    assert "Stop" in payload["hooks"]
+
+
 def test_claude_provider_maps_hook_event_to_session_update(tmp_path: Path) -> None:
     provider = ClaudeProvider(
         settings_path=tmp_path / "settings.json",
