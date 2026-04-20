@@ -3,9 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import signal
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 import gi
 
@@ -86,6 +90,15 @@ INTROSPECTION_XML = """
 
 
 logger = logging.getLogger(__name__)
+
+_GUI_ENV_KEYS = (
+    "DISPLAY",
+    "XAUTHORITY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+    "XDG_CURRENT_DESKTOP",
+)
+_GUI_ENV_PROCESS_HINTS = ("gnome-shell", "chrome", "google-chrome", "Xwayland", "terminator")
 
 
 class BackendService:
@@ -340,7 +353,7 @@ class BackendService:
             label = parameters.unpack()[0]
             logger.info("StartCodexDeviceLogin requested label=%s", label or "<auto>")
             try:
-                started = self.codex_accounts.start_device_login(label, on_complete=self._on_codex_login_complete)
+                started = self._start_codex_login_process(label)
             except Exception as exc:
                 logger.exception("StartCodexDeviceLogin failed label=%s", label or "<auto>")
                 invocation.return_dbus_error("com.lzn.LinuxAgentIsland.Error", str(exc))
@@ -471,9 +484,68 @@ class BackendService:
             GLib.Variant("(s)", (self._serialize_codex_account_status(),)),
         )
 
-    def _on_codex_login_complete(self, _success: bool) -> None:
-        logger.info("Codex device login completion callback success=%s", _success)
-        GLib.idle_add(self._emit_codex_accounts_changed)
+    def _start_codex_login_process(self, label: str) -> bool:
+        command = [sys.executable, "-m", "linux_agent_island.cli", "codex", "login"]
+        if label:
+            command.extend(["--label", label])
+        env = os.environ.copy()
+        env.update(self._gui_environment())
+        process = subprocess.Popen(command, env=env)
+        watcher = threading.Thread(
+            target=self._watch_codex_login_process,
+            args=(process,),
+            daemon=True,
+        )
+        watcher.start()
+        return True
+
+    def _watch_codex_login_process(self, process: subprocess.Popen[object]) -> None:
+        try:
+            return_code = process.wait()
+            logger.info("Codex login CLI exited pid=%s return_code=%s", getattr(process, "pid", None), return_code)
+        except Exception:
+            logger.exception("Codex login CLI watcher failed pid=%s", getattr(process, "pid", None))
+        finally:
+            GLib.idle_add(self._emit_codex_accounts_changed)
+
+    def _gui_environment(self) -> dict[str, str]:
+        gui_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key in _GUI_ENV_KEYS and value
+        }
+        if gui_env.get("DISPLAY") and gui_env.get("XDG_RUNTIME_DIR"):
+            return gui_env
+
+        current_uid = os.getuid()
+        for proc_entry in sorted(Path("/proc").iterdir(), key=lambda path: path.name):
+            if not proc_entry.name.isdigit():
+                continue
+            try:
+                if proc_entry.stat().st_uid != current_uid:
+                    continue
+                cmdline = (proc_entry / "cmdline").read_text(encoding="utf-8", errors="ignore").replace("\x00", " ")
+            except OSError:
+                continue
+            if not any(hint in cmdline for hint in _GUI_ENV_PROCESS_HINTS):
+                continue
+            try:
+                raw_entries = (proc_entry / "environ").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            candidate: dict[str, str] = {}
+            for entry in raw_entries:
+                if not entry or b"=" not in entry:
+                    continue
+                key_raw, value_raw = entry.split(b"=", 1)
+                key = key_raw.decode(errors="ignore")
+                if key in _GUI_ENV_KEYS and value_raw:
+                    candidate[key] = value_raw.decode(errors="ignore")
+            if candidate.get("DISPLAY"):
+                gui_env.update(candidate)
+                return gui_env
+        return gui_env
+
 
 
 def main(argv: list[str] | None = None) -> int:

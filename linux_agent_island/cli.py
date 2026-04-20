@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .codex_accounts import CodexAccountService
 from .core.config import AppConfig, load_frontend_settings
 from .core.logging import configure_logging
 from .providers import get_all_providers
@@ -192,30 +195,348 @@ def uninstall_hooks(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_codex_account_service() -> CodexAccountService:
+    config = AppConfig.default()
+    settings_path = getattr(config, "frontend_settings_path", None)
+    settings = load_frontend_settings(settings_path) if settings_path is not None else load_frontend_settings(Path("/nonexistent"))
+    return CodexAccountService(
+        auth_path=config.codex_auth_path,
+        accounts_dir=config.codex_accounts_dir,
+        manifest_path=config.codex_accounts_manifest_path,
+        configured_codex_bin=settings.codex_bin_path,
+    )
+
+
+def codex_login(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    try:
+        success = service.run_device_login(args.label)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    except Exception as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+    return 0 if success else 3
+
+
+def codex_status(_args: argparse.Namespace) -> int:
+    status = _build_codex_account_service().get_status()
+    print(f"logged_in: {'yes' if status.logged_in else 'no'}")
+    print(f"auth_mode: {status.auth_mode or '-'}")
+    print(f"current_account_label: {status.current_account_label or '-'}")
+    print(f"current_account_id: {status.current_account_id or '-'}")
+    print(f"current_account_managed: {'yes' if status.current_account_managed else 'no'}")
+    print(f"device_login_in_progress: {'yes' if status.device_login_in_progress else 'no'}")
+    print(f"has_running_codex_sessions: {'yes' if status.has_running_codex_sessions else 'no'}")
+    print(f"account_count: {len(status.accounts)}")
+    return 0
+
+
+def _remaining_percent(used_percent: float | None) -> float | str:
+    if used_percent is None:
+        return "-"
+    return max(0.0, min(100.0, 100.0 - used_percent))
+
+
+def _human_timestamp(unix_timestamp: int | None) -> str:
+    if unix_timestamp is None:
+        return "-"
+    return datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _human_duration_until(unix_timestamp: int | None) -> str:
+    if unix_timestamp is None:
+        return "-"
+    remaining_seconds = max(0, int(unix_timestamp - time.time()))
+    days, rem = divmod(remaining_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _seconds = divmod(rem, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if not parts:
+        return "<1m"
+    return " ".join(parts)
+
+
+def _human_datetime(iso_timestamp: str | None) -> str:
+    if not iso_timestamp:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(iso_timestamp)
+    except ValueError:
+        return iso_timestamp
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _title_case_plan(plan_type: str | None) -> str:
+    if not plan_type:
+        return "-"
+    return plan_type.replace("_", " ").title()
+
+
+def _usage_account_label(usage: object) -> str:
+    for field in ("label", "email", "account_id"):
+        value = getattr(usage, field, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Current account"
+
+
+def _percent_text(value: float | str) -> str:
+    if value == "-":
+        return "-"
+    return f"{value}%"
+
+
+def _print_usage_block(usage: object, *, header: str | None = None) -> None:
+    five_hour_reset = getattr(usage, "five_hour_resets_at", None)
+    weekly_reset = getattr(usage, "weekly_resets_at", None)
+    if header:
+        print(header)
+    print(f"Codex account : {_usage_account_label(usage)}")
+    print(f"Plan          : {_title_case_plan(getattr(usage, 'plan_type', None))}")
+    print(f"Expires       : {_human_datetime(getattr(usage, 'subscription_active_until', None))}")
+    print(f"5h left       : {_percent_text(_remaining_percent(getattr(usage, 'five_hour_used_percent', None)))}")
+    print(f"5h resets     : {_human_timestamp(five_hour_reset)} (in {_human_duration_until(five_hour_reset)})")
+    print(f"Week left     : {_percent_text(_remaining_percent(getattr(usage, 'weekly_used_percent', None)))}")
+    print(f"Week resets   : {_human_timestamp(weekly_reset)} (in {_human_duration_until(weekly_reset)})")
+
+
+
+def _print_usage_table(accounts_with_usage: list[tuple[object, object]]) -> None:
+    rows: list[list[str]] = []
+    for account, usage in accounts_with_usage:
+        expires = _human_datetime(getattr(usage, "subscription_active_until", None))
+        if expires != "-":
+            expires = expires[:16]
+        rows.append(
+            [
+                _usage_account_label(usage),
+                "yes" if bool(getattr(account, "is_active", False)) else "",
+                _title_case_plan(getattr(usage, "plan_type", None)),
+                expires,
+                _percent_text(_remaining_percent(getattr(usage, "five_hour_used_percent", None))),
+                _human_duration_until(getattr(usage, "five_hour_resets_at", None)),
+                _percent_text(_remaining_percent(getattr(usage, "weekly_used_percent", None))),
+                _human_duration_until(getattr(usage, "weekly_resets_at", None)),
+            ]
+        )
+
+    headers = ["Account", "Active", "Plan", "Expires", "5h Left", "5h Reset In", "Week Left", "Week Reset In"]
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+
+    print("  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
+    for row in rows:
+        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip())
+
+
+
+def codex_usage(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    try:
+        if getattr(args, "all_accounts", False):
+            accounts = service.list_accounts()
+            if not accounts:
+                usage = service.get_usage_info(None)
+                _print_usage_block(usage)
+                return 0
+            if len(accounts) == 1:
+                usages = [service.get_usage_info(accounts[0].account_id)]
+            else:
+                max_workers = min(8, len(accounts))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    usages = list(executor.map(lambda account: service.get_usage_info(account.account_id), accounts))
+            accounts_with_usage = list(zip(accounts, usages))
+            _print_usage_table(accounts_with_usage)
+            return 0
+        usage = service.get_usage_info(None)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    _print_usage_block(usage)
+    return 0
+
+
+def codex_accounts_list(_args: argparse.Namespace) -> int:
+    accounts = _build_codex_account_service().list_accounts()
+    if not accounts:
+        print("No managed Codex accounts.")
+        return 0
+    for account in accounts:
+        flags: list[str] = []
+        if account.is_default:
+            flags.append("default")
+        if account.is_active:
+            flags.append("active")
+        flag_suffix = f" [{' '.join(flags)}]" if flags else ""
+        print(f"{account.account_id}\t{account.label}{flag_suffix}")
+    return 0
+
+
+def codex_accounts_switch(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    selector = getattr(args, "account", None) or getattr(args, "account_id", None)
+    try:
+        status = service.switch_account(selector)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    print(f"current_account_id: {status.current_account_id or '-'}")
+    print(f"current_account_label: {status.current_account_label or '-'}")
+    return 0
+
+
+def codex_accounts_rename(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    try:
+        service.rename_account(args.account_id, args.label)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    print(f"renamed {args.account_id} -> {args.label}")
+    return 0
+
+
+def codex_accounts_delete(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    try:
+        service.delete_account(args.account_id)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    print(f"deleted {args.account_id}")
+    return 0
+
+
+def codex_accounts_set_default(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    try:
+        service.set_default_account(args.account_id)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    print(f"default account: {args.account_id}")
+    return 0
+
+
+def codex_accounts_import_current(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    try:
+        imported = service.import_current_auth(args.label)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    print(f"imported {imported.account_id}\t{imported.label}")
+    return 0
+
+
+def _configure_codex_login_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--label", default="", help="Optional label for the new account")
+    parser.set_defaults(func=codex_login)
+
+
+def _configure_codex_accounts_subcommands(
+    codex_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    accounts_parser = codex_subparsers.add_parser("accounts", help="Manage multiple Codex accounts")
+    accounts_subparsers = accounts_parser.add_subparsers(dest="codex_accounts_command", required=True)
+
+    accounts_list_parser = accounts_subparsers.add_parser("list", help="List managed Codex accounts")
+    accounts_list_parser.set_defaults(func=codex_accounts_list)
+
+    accounts_switch_parser = accounts_subparsers.add_parser("switch", help="Switch the active Codex account")
+    accounts_switch_parser.add_argument("account", help="Account ID or label to switch to")
+    accounts_switch_parser.set_defaults(func=codex_accounts_switch)
+
+    accounts_rename_parser = accounts_subparsers.add_parser("rename", help="Rename a managed Codex account")
+    accounts_rename_parser.add_argument("account_id", help="Current account ID")
+    accounts_rename_parser.add_argument("label", help="New label for the account")
+    accounts_rename_parser.set_defaults(func=codex_accounts_rename)
+
+    accounts_delete_parser = accounts_subparsers.add_parser("delete", help="Delete a managed Codex account")
+    accounts_delete_parser.add_argument("account_id", help="Account ID to delete")
+    accounts_delete_parser.set_defaults(func=codex_accounts_delete)
+
+    accounts_default_parser = accounts_subparsers.add_parser("set-default", help="Set the default Codex account")
+    accounts_default_parser.add_argument("account_id", help="Account ID to set as default")
+    accounts_default_parser.set_defaults(func=codex_accounts_set_default)
+
+    accounts_import_current_parser = accounts_subparsers.add_parser(
+        "import-current", help="Import the current Codex auth from ~/.codex/auth.json"
+    )
+    accounts_import_current_parser.add_argument("--label", default="", help="Label for the imported account")
+    accounts_import_current_parser.set_defaults(func=codex_accounts_import_current)
+
+
+def _add_codex_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    codex_parser = subparsers.add_parser("codex", help="Codex CLI integration commands")
+    codex_subparsers = codex_parser.add_subparsers(dest="codex_command", required=True)
+
+    codex_login_parser = codex_subparsers.add_parser("login", help="Start a new Codex device login flow")
+    _configure_codex_login_parser(codex_login_parser)
+
+    codex_status_parser = codex_subparsers.add_parser("status", help="Show current Codex authentication status")
+    codex_status_parser.set_defaults(func=codex_status)
+
+    codex_usage_parser = codex_subparsers.add_parser("usage", help="Show usage and quota information for Codex accounts")
+    codex_usage_parser.add_argument(
+        "--all", dest="all_accounts", action="store_true", help="Show usage for all managed accounts"
+    )
+    codex_usage_parser.set_defaults(func=codex_usage)
+
+    _configure_codex_accounts_subcommands(codex_subparsers)
+
+    # Legacy flat alias kept for compatibility while the canonical command becomes
+    # `linux-agent-island codex <subcommand>`.
+    legacy_codex_login_parser = subparsers.add_parser(
+        "codex-login", help="Legacy alias for 'codex login' (deprecated)"
+    )
+    _configure_codex_login_parser(legacy_codex_login_parser)
+    legacy_codex_login_parser.set_defaults(func=codex_login, _legacy_codex_login_alias=True)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="linux-agent-island")
+    prog = Path(sys.argv[0]).name if argv is None and sys.argv else "linux-agent-island"
+    parser = argparse.ArgumentParser(prog=prog)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    daemon_parser = subparsers.add_parser("daemon")
-    daemon_parser.add_argument("--log-level")
+    daemon_parser = subparsers.add_parser("daemon", help="Start the background daemon service")
+    daemon_parser.add_argument("--log-level", help="Set logging level (DEBUG, INFO, WARNING, ERROR)")
     daemon_parser.set_defaults(func=daemon)
 
-    open_parser = subparsers.add_parser("open")
+    open_parser = subparsers.add_parser("open", help="Show the floating island UI")
     open_parser.set_defaults(func=open_app)
 
-    settings_parser = subparsers.add_parser("settings")
+    settings_parser = subparsers.add_parser("settings", help="Open the settings window")
     settings_parser.set_defaults(func=open_settings)
 
-    status_parser = subparsers.add_parser("status")
+    status_parser = subparsers.add_parser("status", help="Show the current service and D-Bus status")
     status_parser.set_defaults(func=status)
 
-    install_hooks_parser = subparsers.add_parser("install-hooks")
+    install_hooks_parser = subparsers.add_parser("install-hooks", help="Install event hooks for supported agents")
     install_hooks_parser.set_defaults(func=install_hooks)
 
-    uninstall_hooks_parser = subparsers.add_parser("uninstall-hooks")
+    uninstall_hooks_parser = subparsers.add_parser("uninstall-hooks", help="Uninstall managed agent event hooks")
     uninstall_hooks_parser.set_defaults(func=uninstall_hooks)
 
+    _add_codex_subcommands(subparsers)
+
     args = parser.parse_args(argv)
+    if getattr(args, "_legacy_codex_login_alias", False):
+        sys.stderr.write(
+            "warning: `linux-agent-island codex-login` is deprecated; use `linux-agent-island codex login` instead\n"
+        )
     return int(args.func(args))
 
 

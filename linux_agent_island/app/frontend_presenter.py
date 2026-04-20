@@ -79,19 +79,15 @@ def expanded_header_title(sessions: list[AgentSession]) -> str:
 
 def codex_account_button_label(status: CodexAccountStatus) -> str:
     if status.current_account_label:
-        return status.current_account_label
+        return f"Codex · {status.current_account_label}"
     if status.device_login_in_progress:
-        return "Logging in..."
+        return "Codex · Connecting..."
     if status.logged_in:
-        return "External login"
-    return "No Codex login"
+        return "Codex · External account"
+    return "Codex · Not connected"
 
 
 def codex_account_notice(status: CodexAccountStatus) -> str:
-    if not status.has_running_codex_sessions:
-        return ""
-    if status.switch_affects_new_sessions_only:
-        return "Account switches affect new Codex sessions only."
     return ""
 
 

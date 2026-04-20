@@ -83,45 +83,18 @@ window {
   min-height: 34px;
 }
 
-.account-button {
+.account-pill {
   min-height: 28px;
-  padding: 0 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(61, 220, 132, 0.12);
+  border: 1px solid rgba(61, 220, 132, 0.28);
 }
 
-.account-login-button {
-  min-height: 28px;
-  padding: 0 8px;
-}
-
-.account-menu {
-  background: rgba(18, 18, 22, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 8px;
-}
-
-.account-menu-title {
-  color: #9ec4ff;
-  font-size: 11px;
+.account-pill-text {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
   font-weight: 700;
-}
-
-.account-row {
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 8px;
-  padding: 6px 8px;
-}
-
-.account-row-active {
-  border: 1px solid rgba(61, 220, 132, 0.5);
-}
-
-.account-row-default {
-  border: 1px solid rgba(158, 196, 255, 0.35);
-}
-
-.account-entry {
-  min-width: 150px;
 }
 
 .account-note {

@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 
 [project.scripts]
 linux-agent-island = "linux_agent_island.cli:main"
+lai = "linux_agent_island.cli:main"
 linux-agent-island-backend = "linux_agent_island.app.backend:main"
 linux-agent-island-frontend = "linux_agent_island.app.frontend:main"
 

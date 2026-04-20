@@ -236,6 +236,100 @@ class CodexAccountStatus:
 
 
 @dataclass(slots=True)
+class CodexUsageInfo:
+    account_id: str | None = None
+    label: str | None = None
+    email: str | None = None
+    auth_mode: str | None = None
+    plan_type: str | None = None
+    subscription_active_start: str | None = None
+    subscription_active_until: str | None = None
+    subscription_last_checked: str | None = None
+    remaining_days: float | None = None
+    remaining_hours: float | None = None
+    five_hour_used_percent: float | None = None
+    five_hour_window_minutes: int | None = None
+    five_hour_resets_at: int | None = None
+    weekly_used_percent: float | None = None
+    weekly_window_minutes: int | None = None
+    weekly_resets_at: int | None = None
+    has_credits: bool | None = None
+    credits_unlimited: bool | None = None
+    credits_balance: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "CodexUsageInfo":
+        return cls(
+            account_id=str(payload["account_id"]) if payload.get("account_id") is not None else None,
+            label=str(payload["label"]) if payload.get("label") is not None else None,
+            email=str(payload["email"]) if payload.get("email") is not None else None,
+            auth_mode=str(payload["auth_mode"]) if payload.get("auth_mode") is not None else None,
+            plan_type=str(payload["plan_type"]) if payload.get("plan_type") is not None else None,
+            subscription_active_start=(
+                str(payload["subscription_active_start"])
+                if payload.get("subscription_active_start") is not None
+                else None
+            ),
+            subscription_active_until=(
+                str(payload["subscription_active_until"])
+                if payload.get("subscription_active_until") is not None
+                else None
+            ),
+            subscription_last_checked=(
+                str(payload["subscription_last_checked"])
+                if payload.get("subscription_last_checked") is not None
+                else None
+            ),
+            remaining_days=float(payload["remaining_days"]) if payload.get("remaining_days") is not None else None,
+            remaining_hours=(
+                float(payload["remaining_hours"]) if payload.get("remaining_hours") is not None else None
+            ),
+            five_hour_used_percent=(
+                float(payload["five_hour_used_percent"])
+                if payload.get("five_hour_used_percent") is not None
+                else None
+            ),
+            five_hour_window_minutes=(
+                int(payload["five_hour_window_minutes"])
+                if payload.get("five_hour_window_minutes") is not None
+                else None
+            ),
+            five_hour_resets_at=(
+                int(payload["five_hour_resets_at"])
+                if payload.get("five_hour_resets_at") is not None
+                else None
+            ),
+            weekly_used_percent=(
+                float(payload["weekly_used_percent"])
+                if payload.get("weekly_used_percent") is not None
+                else None
+            ),
+            weekly_window_minutes=(
+                int(payload["weekly_window_minutes"])
+                if payload.get("weekly_window_minutes") is not None
+                else None
+            ),
+            weekly_resets_at=(
+                int(payload["weekly_resets_at"])
+                if payload.get("weekly_resets_at") is not None
+                else None
+            ),
+            has_credits=bool(payload["has_credits"]) if payload.get("has_credits") is not None else None,
+            credits_unlimited=(
+                bool(payload["credits_unlimited"])
+                if payload.get("credits_unlimited") is not None
+                else None
+            ),
+            credits_balance=(
+                str(payload["credits_balance"]) if payload.get("credits_balance") is not None else None
+            ),
+        )
+
+
+@dataclass(slots=True)
 class AgentSession:
     provider: str
     session_id: str

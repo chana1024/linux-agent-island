@@ -88,7 +88,7 @@ class FrontendSettingsMixin:
         title.add_css_class("title")
         root.append(title)
 
-        status_text = self.codex_account_status.current_account_label or "No Codex login"
+        status_text = self.codex_account_status.current_account_label or "No Codex account connected"
         status = Gtk.Label(label=f"Current account: {status_text}")
         status.set_xalign(0)
         status.add_css_class("meta")
@@ -100,7 +100,7 @@ class FrontendSettingsMixin:
             notice.add_css_class("meta")
             root.append(notice)
 
-        login_button = Gtk.Button(label="Log in new account")
+        login_button = Gtk.Button(label="Connect new account")
         login_button.set_sensitive(not self.codex_account_status.device_login_in_progress)
         login_button.connect("clicked", lambda *_args: self._start_codex_device_login())
         root.append(login_button)

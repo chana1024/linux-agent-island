@@ -19,6 +19,7 @@ class FrontendSettings:
     top_bar_gap: int = DEFAULT_TOP_BAR_GAP
     log_level: str = DEFAULT_LOG_LEVEL
     start_on_login: bool = DEFAULT_START_ON_LOGIN
+    codex_bin_path: str = ""
 
 
 def load_frontend_settings(settings_path: Path) -> FrontendSettings:
@@ -41,10 +42,13 @@ def load_frontend_settings(settings_path: Path) -> FrontendSettings:
     start_on_login = payload.get("start_on_login", DEFAULT_START_ON_LOGIN)
     if not isinstance(start_on_login, bool):
         start_on_login = DEFAULT_START_ON_LOGIN
+    raw_codex_bin_path = payload.get("codex_bin_path", "")
+    codex_bin_path = raw_codex_bin_path.strip() if isinstance(raw_codex_bin_path, str) else ""
     return FrontendSettings(
         top_bar_gap=top_bar_gap,
         log_level=log_level,
         start_on_login=start_on_login,
+        codex_bin_path=codex_bin_path,
     )
 
 
@@ -56,6 +60,7 @@ def save_frontend_settings(settings_path: Path, settings: FrontendSettings) -> N
                 "top_bar_gap": settings.top_bar_gap,
                 "log_level": settings.log_level,
                 "start_on_login": settings.start_on_login,
+                "codex_bin_path": settings.codex_bin_path,
             },
             indent=2,
             sort_keys=True,

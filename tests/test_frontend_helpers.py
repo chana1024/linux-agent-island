@@ -171,16 +171,26 @@ def test_expanded_header_title_includes_app_name_and_visible_session_count() -> 
 
 def test_codex_account_button_label_prefers_active_label() -> None:
     status = CodexAccountStatus(logged_in=True, current_account_label="Work")
-    assert codex_account_button_label(status) == "Work"
+    assert codex_account_button_label(status) == "Codex · Work"
 
 
-def test_codex_account_notice_mentions_new_session_scope_when_running() -> None:
+def test_codex_account_button_label_uses_new_empty_state_wording() -> None:
+    status = CodexAccountStatus(logged_in=False)
+    assert codex_account_button_label(status) == "Codex · Not connected"
+
+
+def test_codex_account_button_label_uses_connecting_state_wording() -> None:
+    status = CodexAccountStatus(logged_in=False, device_login_in_progress=True)
+    assert codex_account_button_label(status) == "Codex · Connecting..."
+
+
+def test_codex_account_notice_is_empty_without_switch_ui() -> None:
     status = CodexAccountStatus(
         logged_in=True,
         has_running_codex_sessions=True,
         switch_affects_new_sessions_only=True,
     )
-    assert codex_account_notice(status) == "Account switches affect new Codex sessions only."
+    assert codex_account_notice(status) == ""
 
 
 def test_panel_sessions_returns_all_visible_sessions_without_truncation() -> None:

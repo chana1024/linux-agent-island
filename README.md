@@ -58,15 +58,27 @@ cd linux-agent-island
 systemctl --user start linux-agent-island.service
 ```
 
-The installer creates a user-level desktop app, a `systemd --user` service, and the `linux-agent-island` CLI. The installed app runs from `~/.local/share/linux-agent-island/venv`, so it does not depend on the source checkout after installation.
+The installer creates a user-level desktop app, a `systemd --user` service, and both `linux-agent-island` and `lai` CLI commands. The installed app runs from `~/.local/share/linux-agent-island/venv`, so it does not depend on the source checkout after installation.
 
 ## Use
 
 ```bash
-linux-agent-island open       # show the island
-linux-agent-island settings   # open settings
-linux-agent-island status     # service and D-Bus status
+lai open                                             # short alias for daily use
+linux-agent-island open                              # show the island
+linux-agent-island settings                          # open settings
+linux-agent-island status                            # service and D-Bus status
+linux-agent-island codex login --label Work          # launch a Codex login flow from CLI
+linux-agent-island codex status                      # show current Codex auth/account state
+linux-agent-island codex usage                       # show current account usage and quota
+linux-agent-island codex accounts list               # list managed Codex accounts
+linux-agent-island codex accounts switch <account>   # switch active managed account
+linux-agent-island codex accounts rename <id> <name> # rename a managed account
+linux-agent-island codex accounts set-default <id>   # change default account
+linux-agent-island codex accounts delete <id>        # delete a managed account snapshot
+linux-agent-island codex accounts import-current     # import current ~/.codex/auth.json into managed accounts
 ```
+
+`lai` is just a short alias for `linux-agent-island`, so every command works with either name. The settings UI uses the same login path internally through the backend D-Bus method: the backend starts `linux-agent-island codex login` asynchronously, then emits a Codex account status refresh when the CLI exits. The CLI now reserves the top-level `codex` namespace for future Codex subcommands instead of adding more flat command names. The old `linux-agent-island codex-login` alias still works for now, but it prints a deprecation warning and should be treated as legacy. Default account labels prefer the locally decoded token email (`id_token.email`, then `access_token.email`, then `access_token["https://api.openai.com/profile"].email`) before falling back to generic names.
 
 Useful service commands:
 

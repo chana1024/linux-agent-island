@@ -31,13 +31,13 @@ def test_load_frontend_settings_reads_top_bar_gap(tmp_path: Path) -> None:
 
     settings = load_frontend_settings(settings_path)
 
-    assert settings == FrontendSettings(top_bar_gap=14, log_level="INFO", start_on_login=True)
+    assert settings == FrontendSettings(top_bar_gap=14, log_level="INFO", start_on_login=True, codex_bin_path="")
 
 
 def test_load_frontend_settings_defaults_when_file_missing(tmp_path: Path) -> None:
     settings = load_frontend_settings(tmp_path / "missing.json")
 
-    assert settings == FrontendSettings(top_bar_gap=8)
+    assert settings == FrontendSettings(top_bar_gap=8, codex_bin_path="")
 
 
 def test_load_frontend_settings_clamps_invalid_gap(tmp_path: Path) -> None:
@@ -46,27 +46,36 @@ def test_load_frontend_settings_clamps_invalid_gap(tmp_path: Path) -> None:
 
     settings = load_frontend_settings(settings_path)
 
-    assert settings == FrontendSettings(top_bar_gap=0)
+    assert settings == FrontendSettings(top_bar_gap=0, codex_bin_path="")
 
 
 def test_load_frontend_settings_reads_log_level_and_autostart(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"top_bar_gap": 14, "log_level": "debug", "start_on_login": False}),
+        json.dumps({"top_bar_gap": 14, "log_level": "debug", "start_on_login": False, "codex_bin_path": "/tmp/codex"}),
         encoding="utf-8",
     )
 
     settings = load_frontend_settings(settings_path)
 
-    assert settings == FrontendSettings(top_bar_gap=14, log_level="DEBUG", start_on_login=False)
+    assert settings == FrontendSettings(
+        top_bar_gap=14,
+        log_level="DEBUG",
+        start_on_login=False,
+        codex_bin_path="/tmp/codex",
+    )
 
 
 def test_save_frontend_settings_writes_supported_fields(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
 
-    save_frontend_settings(settings_path, FrontendSettings(top_bar_gap=3, log_level="ERROR", start_on_login=False))
+    save_frontend_settings(
+        settings_path,
+        FrontendSettings(top_bar_gap=3, log_level="ERROR", start_on_login=False, codex_bin_path="/tmp/codex"),
+    )
 
     assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "codex_bin_path": "/tmp/codex",
         "log_level": "ERROR",
         "start_on_login": False,
         "top_bar_gap": 3,

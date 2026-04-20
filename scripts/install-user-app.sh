@@ -15,6 +15,7 @@ SERVICE_PATH="$CONFIG_SYSTEMD_DIR/$SERVICE_NAME"
 DESKTOP_PATH="$APPLICATIONS_DIR/$APP_ID.desktop"
 ICON_PATH="$ICON_DIR/$APP_ID.svg"
 WRAPPER_PATH="$BIN_DIR/$APP_ID"
+ALIAS_WRAPPER_PATH="$BIN_DIR/lai"
 PYTHON="${PYTHON:-/usr/bin/python3}"
 
 missing=()
@@ -45,6 +46,7 @@ mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$CONFIG_SYSTEMD_DIR" "$APPLICATIONS_DIR" "$I
 "$VENV_DIR/bin/python" -m pip install "$ROOT_DIR"
 
 ln -sf "$VENV_DIR/bin/linux-agent-island" "$WRAPPER_PATH"
+ln -sf "$VENV_DIR/bin/lai" "$ALIAS_WRAPPER_PATH"
 
 cat >"$SERVICE_PATH" <<EOF
 [Unit]
@@ -100,9 +102,11 @@ Start now:
 
 Open:
   $WRAPPER_PATH open
+  $ALIAS_WRAPPER_PATH open
 
 Status:
   $WRAPPER_PATH status
+  $ALIAS_WRAPPER_PATH status
   journalctl --user -u $SERVICE_NAME -f
 
 If the service starts without DISPLAY/X11 access, run this once in your desktop session:
