@@ -25,7 +25,7 @@ from .frontend_presenter import (
     refresh_completion_highlights,
     session_key,
 )
-from .frontend_windowing import active_window_id, activate_window_by_id, focus_window, is_window_active, window_x11_id
+from .frontend_windowing import active_window_id, activate_window_by_id, focus_window, is_window_active, minimize_window, window_x11_id
 
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,11 @@ class FrontendInteractionsMixin:
             return False
 
         if is_window_active(self.window):
-            self.window.hide()
+            minimized = minimize_window(self.window)
             restored = activate_window_by_id(self.last_external_window_id)
             logger.info(
-                "toggle island focus hid island restored_previous_window=%s previous_window_id=%s",
+                "toggle island focus minimized island minimized=%s restored_previous_window=%s previous_window_id=%s",
+                minimized,
                 restored,
                 self.last_external_window_id or "<none>",
             )

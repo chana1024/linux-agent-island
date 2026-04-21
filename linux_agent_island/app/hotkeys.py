@@ -31,7 +31,7 @@ class GlobalHotkeyListener:
         self._X = X
         keycode = self._display.keysym_to_keycode(XK.string_to_keysym("i"))
         if keycode == 0:
-            raise RuntimeError("failed to resolve X11 keycode for Ctrl+I")
+            raise RuntimeError("failed to resolve X11 keycode for Ctrl+Alt+I")
         self._keycode = keycode
         self._grab_masks = self._build_grab_masks()
         self._grab_hotkey()
@@ -46,17 +46,18 @@ class GlobalHotkeyListener:
         from Xlib import XK
 
         numlock_keycode = self._display.keysym_to_keycode(XK.string_to_keysym("Num_Lock"))
+        base_mask = self._X.ControlMask | self._X.Mod1Mask
         for index, keycodes in enumerate(modifier_map):
             if numlock_keycode and numlock_keycode in keycodes:
                 numlock_mask = 1 << index
                 break
         masks = {
-            self._X.ControlMask,
-            self._X.ControlMask | self._X.LockMask,
+            base_mask,
+            base_mask | self._X.LockMask,
         }
         if numlock_mask:
-            masks.add(self._X.ControlMask | numlock_mask)
-            masks.add(self._X.ControlMask | self._X.LockMask | numlock_mask)
+            masks.add(base_mask | numlock_mask)
+            masks.add(base_mask | self._X.LockMask | numlock_mask)
         return tuple(sorted(masks))
 
     def _grab_hotkey(self) -> None:
@@ -84,7 +85,7 @@ class GlobalHotkeyListener:
         if event.state not in self._grab_masks:
             return
         result = _run_application_action(self.config, "toggle-island-focus")
-        logger.info("global Ctrl+I triggered toggle-island-focus result=%s", result)
+        logger.info("global Ctrl+Alt+I triggered toggle-island-focus result=%s", result)
 
     def run_forever(self) -> None:
         if self._display is None:

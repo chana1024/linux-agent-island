@@ -185,6 +185,36 @@ def activate_window_by_id(window_id: str | None) -> bool:
     return result.returncode == 0
 
 
+def minimize_window(window: Gtk.ApplicationWindow | None) -> bool:
+    if window is None:
+        return False
+
+    minimized = False
+    minimize = getattr(window, "minimize", None)
+    if callable(minimize):
+        try:
+            minimize()
+            minimized = True
+        except Exception:
+            pass
+
+    window_id = window_x11_id(window)
+    if window_id is None:
+        return minimized
+
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-i", "-r", window_id, "-b", "add,hidden"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+    except OSError:
+        return minimized
+    return minimized or result.returncode == 0
+
+
 def focus_window(window: Gtk.ApplicationWindow | None) -> bool:
     if window is None:
         return False

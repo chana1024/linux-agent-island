@@ -87,7 +87,7 @@ linux-agent-island codex accounts import-current     # import current ~/.codex/a
 
 Keyboard shortcuts:
 
-- Global `Ctrl+I`: focus the island; if the island is already the active window, hide it and restore the previously active X11 window.
+- Global `Ctrl+Alt+I`: focus the island; if the island is already the active window, minimize it and restore the previously active X11 window.
 - Window-local `Ctrl+H`: toggle highlight on the currently selected session.
 
 Useful service commands:

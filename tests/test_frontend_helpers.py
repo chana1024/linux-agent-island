@@ -602,6 +602,39 @@ def test_focus_window_activates_x11_surface(monkeypatch) -> None:
     ]
 
 
+def test_minimize_window_uses_window_minimize_and_x11_hidden_state(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class FakeSurface:
+        def get_xid(self) -> int:
+            return 0x03E00007
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.minimize_count = 0
+
+        def minimize(self) -> None:
+            self.minimize_count += 1
+
+        def get_surface(self) -> FakeSurface:
+            return FakeSurface()
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(frontend_windowing, "GdkX11", SimpleNamespace(X11Surface=FakeSurface))
+    monkeypatch.setattr(frontend_windowing.subprocess, "run", fake_run)
+
+    window = FakeWindow()
+
+    assert frontend_windowing.minimize_window(window) is True
+    assert window.minimize_count == 1
+    assert calls == [
+        ["wmctrl", "-i", "-r", "0x3e00007", "-b", "add,hidden"],
+    ]
+
+
 def test_active_window_id_parses_x11_root_output(monkeypatch) -> None:
     monkeypatch.setattr(
         frontend_windowing.subprocess,
@@ -661,27 +694,26 @@ def test_toggle_island_focus_shows_and_remembers_previous_window(monkeypatch) ->
     assert applied == [True]
 
 
-def test_toggle_island_focus_hides_and_restores_previous_window(monkeypatch) -> None:
-    hidden: list[bool] = []
-
-    class FakeWindow:
-        def hide(self) -> None:
-            hidden.append(True)
-
+def test_toggle_island_focus_minimizes_and_restores_previous_window(monkeypatch) -> None:
     app = FrontendApp()
-    app.window = FakeWindow()
+    app.window = object()
     app.last_external_window_id = "0x123"
 
+    minimized: list[object] = []
     restored: list[str | None] = []
 
     monkeypatch.setattr("linux_agent_island.app.frontend_interactions.is_window_active", lambda _window: True)
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.minimize_window",
+        lambda window: minimized.append(window) or True,
+    )
     monkeypatch.setattr(
         "linux_agent_island.app.frontend_interactions.activate_window_by_id",
         lambda window_id: restored.append(window_id) or True,
     )
 
     assert app._toggle_island_focus() is True
-    assert hidden == [True]
+    assert minimized == [app.window]
     assert restored == ["0x123"]
 
 

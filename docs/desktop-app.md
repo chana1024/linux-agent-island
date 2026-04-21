@@ -93,7 +93,7 @@ linux-agent-island uninstall-hooks
 
 Keyboard shortcuts:
 
-- Global `Ctrl+I`: focus the island; if the island is already active, hide it and restore the previous X11 window.
+- Global `Ctrl+Alt+I`: focus the island; if the island is already active, minimize it and restore the previous X11 window.
 - Window-local `Ctrl+H`: toggle highlight on the selected session row.
 
 Default labels for imported Codex accounts prefer the locally decoded token email in this order: `id_token.email`, `access_token.email`, `access_token["https://api.openai.com/profile"].email`, then fallback names.
