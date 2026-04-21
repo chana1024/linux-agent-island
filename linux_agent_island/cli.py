@@ -128,6 +128,12 @@ def daemon(args: argparse.Namespace) -> int:
     )
     children.append(frontend)
 
+    hotkeys = subprocess.Popen(
+        [sys.executable, "-m", "linux_agent_island.app.hotkeys", "--log-level", log_level],
+        env=env,
+    )
+    children.append(hotkeys)
+
     tray = subprocess.Popen(
         [sys.executable, "-m", "linux_agent_island.app.tray", "--log-level", log_level],
         env=env,
@@ -140,25 +146,35 @@ def daemon(args: argparse.Namespace) -> int:
                 return backend.returncode or 0
             if frontend.poll() is not None:
                 return frontend.returncode or 0
+            if hotkeys.poll() is not None:
+                return hotkeys.returncode or 0
             time.sleep(0.2)
     finally:
         stop_children()
 
 
-def open_app(_args: argparse.Namespace) -> int:
+def _run_frontend_action_starting_service(action_name: str) -> int:
     config = AppConfig.default()
     started = _start_service(config)
     if started != 0:
         return started
-    return _run_application_action(config, "show-island")
+    return _run_application_action(config, action_name)
+
+
+def open_app(_args: argparse.Namespace) -> int:
+    return _run_frontend_action_starting_service("show-island")
 
 
 def open_settings(_args: argparse.Namespace) -> int:
-    config = AppConfig.default()
-    started = _start_service(config)
-    if started != 0:
-        return started
-    return _run_application_action(config, "open-settings")
+    return _run_frontend_action_starting_service("open-settings")
+
+
+def toggle_app(_args: argparse.Namespace) -> int:
+    return _run_frontend_action_starting_service("toggle-island-focus")
+
+
+def highlight_selected(_args: argparse.Namespace) -> int:
+    return _run_frontend_action_starting_service("toggle-highlight-selected")
 
 
 def status(_args: argparse.Namespace) -> int:
@@ -225,11 +241,22 @@ def codex_status(_args: argparse.Namespace) -> int:
     print(f"logged_in: {'yes' if status.logged_in else 'no'}")
     print(f"auth_mode: {status.auth_mode or '-'}")
     print(f"current_account_label: {status.current_account_label or '-'}")
+    print(f"current_account_no: {_account_number_for_id(status.accounts, status.current_account_id)}")
     print(f"current_account_id: {status.current_account_id or '-'}")
     print(f"current_account_managed: {'yes' if status.current_account_managed else 'no'}")
     print(f"device_login_in_progress: {'yes' if status.device_login_in_progress else 'no'}")
     print(f"has_running_codex_sessions: {'yes' if status.has_running_codex_sessions else 'no'}")
     print(f"account_count: {len(status.accounts)}")
+    if status.accounts:
+        print("accounts:")
+        for index, account in enumerate(status.accounts, start=1):
+            flags: list[str] = []
+            if account.is_default:
+                flags.append("default")
+            if account.is_active:
+                flags.append("active")
+            flag_suffix = f" [{' '.join(flags)}]" if flags else ""
+            print(f"  {index}\t{account.account_id}\t{account.label}{flag_suffix}")
     return 0
 
 
@@ -290,18 +317,28 @@ def _usage_account_label(usage: object) -> str:
     return "Current account"
 
 
+def _account_number_for_id(accounts: list[object], account_id: object) -> str:
+    if not isinstance(account_id, str) or not account_id.strip():
+        return "-"
+    for index, account in enumerate(accounts, start=1):
+        if getattr(account, "account_id", None) == account_id:
+            return str(index)
+    return "-"
+
+
 def _percent_text(value: float | str) -> str:
     if value == "-":
         return "-"
     return f"{value}%"
 
 
-def _print_usage_block(usage: object, *, header: str | None = None) -> None:
+def _print_usage_block(usage: object, *, header: str | None = None, account_number: str = "-") -> None:
     five_hour_reset = getattr(usage, "five_hour_resets_at", None)
     weekly_reset = getattr(usage, "weekly_resets_at", None)
     if header:
         print(header)
     print(f"Codex account : {_usage_account_label(usage)}")
+    print(f"Account no    : {account_number}")
     print(f"Plan          : {_title_case_plan(getattr(usage, 'plan_type', None))}")
     print(f"Expires       : {_human_datetime(getattr(usage, 'subscription_active_until', None))}")
     print(f"5h left       : {_percent_text(_remaining_percent(getattr(usage, 'five_hour_used_percent', None)))}")
@@ -313,12 +350,13 @@ def _print_usage_block(usage: object, *, header: str | None = None) -> None:
 
 def _print_usage_table(accounts_with_usage: list[tuple[object, object]]) -> None:
     rows: list[list[str]] = []
-    for account, usage in accounts_with_usage:
+    for index, (account, usage) in enumerate(accounts_with_usage, start=1):
         expires = _human_datetime(getattr(usage, "subscription_active_until", None))
         if expires != "-":
             expires = expires[:16]
         rows.append(
             [
+                str(index),
                 _usage_account_label(usage),
                 "yes" if bool(getattr(account, "is_active", False)) else "",
                 _title_case_plan(getattr(usage, "plan_type", None)),
@@ -330,7 +368,7 @@ def _print_usage_table(accounts_with_usage: list[tuple[object, object]]) -> None
             ]
         )
 
-    headers = ["Account", "Active", "Plan", "Expires", "5h Left", "5h Reset In", "Week Left", "Week Reset In"]
+    headers = ["No", "Account", "Active", "Plan", "Expires", "5h Left", "5h Reset In", "Week Left", "Week Reset In"]
     widths = [len(header) for header in headers]
     for row in rows:
         for index, value in enumerate(row):
@@ -345,6 +383,9 @@ def _print_usage_table(accounts_with_usage: list[tuple[object, object]]) -> None
 def codex_usage(args: argparse.Namespace) -> int:
     service = _build_codex_account_service()
     try:
+        account_selector = (getattr(args, "account", None) or "").strip()
+        if getattr(args, "all_accounts", False) and account_selector:
+            raise ValueError("cannot combine --all with an account selector")
         if getattr(args, "all_accounts", False):
             accounts = service.list_accounts()
             if not accounts:
@@ -360,11 +401,32 @@ def codex_usage(args: argparse.Namespace) -> int:
             accounts_with_usage = list(zip(accounts, usages))
             _print_usage_table(accounts_with_usage)
             return 0
-        usage = service.get_usage_info(None)
+        usage = service.get_usage_info(account_selector or None)
+        accounts = service.list_accounts()
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    _print_usage_block(usage)
+    _print_usage_block(usage, account_number=_account_number_for_id(accounts, getattr(usage, "account_id", None)))
+    return 0
+
+
+def codex_sync_auth(args: argparse.Namespace) -> int:
+    service = _build_codex_account_service()
+    selector = (getattr(args, "account", None) or getattr(args, "email", None) or "").strip()
+    try:
+        result = service.sync_credentials(selector or None)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    except Exception as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+    account_text = result.account_email or result.account_label or "current account"
+    print(f"synced account: {account_text}")
+    print(f"openclaw_targets: {len(result.openclaw_paths)}")
+    for path in result.openclaw_paths:
+        print(f"openclaw: {path}")
+    print(f"hermes: {result.hermes_auth_path}")
     return 0
 
 
@@ -373,14 +435,14 @@ def codex_accounts_list(_args: argparse.Namespace) -> int:
     if not accounts:
         print("No managed Codex accounts.")
         return 0
-    for account in accounts:
+    for index, account in enumerate(accounts, start=1):
         flags: list[str] = []
         if account.is_default:
             flags.append("default")
         if account.is_active:
             flags.append("active")
         flag_suffix = f" [{' '.join(flags)}]" if flags else ""
-        print(f"{account.account_id}\t{account.label}{flag_suffix}")
+        print(f"{index}\t{account.account_id}\t{account.label}{flag_suffix}")
     return 0
 
 
@@ -392,6 +454,7 @@ def codex_accounts_switch(args: argparse.Namespace) -> int:
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
+    print(f"current_account_no: {_account_number_for_id(getattr(status, 'accounts', []), status.current_account_id)}")
     print(f"current_account_id: {status.current_account_id or '-'}")
     print(f"current_account_label: {status.current_account_label or '-'}")
     return 0
@@ -456,7 +519,7 @@ def _configure_codex_accounts_subcommands(
     accounts_list_parser.set_defaults(func=codex_accounts_list)
 
     accounts_switch_parser = accounts_subparsers.add_parser("switch", help="Switch the active Codex account")
-    accounts_switch_parser.add_argument("account", help="Account ID or label to switch to")
+    accounts_switch_parser.add_argument("account", help="Account number, ID, label, or email to switch to")
     accounts_switch_parser.set_defaults(func=codex_accounts_switch)
 
     accounts_rename_parser = accounts_subparsers.add_parser("rename", help="Rename a managed Codex account")
@@ -483,7 +546,7 @@ def _add_codex_subcommands(subparsers: argparse._SubParsersAction[argparse.Argum
     codex_parser = subparsers.add_parser("codex", help="Codex CLI integration commands")
     codex_subparsers = codex_parser.add_subparsers(dest="codex_command", required=True)
 
-    codex_login_parser = codex_subparsers.add_parser("login", help="Start a new Codex device login flow")
+    codex_login_parser = codex_subparsers.add_parser("login", help="Start a new Codex login flow")
     _configure_codex_login_parser(codex_login_parser)
 
     codex_status_parser = codex_subparsers.add_parser("status", help="Show current Codex authentication status")
@@ -491,9 +554,26 @@ def _add_codex_subcommands(subparsers: argparse._SubParsersAction[argparse.Argum
 
     codex_usage_parser = codex_subparsers.add_parser("usage", help="Show usage and quota information for Codex accounts")
     codex_usage_parser.add_argument(
+        "account",
+        nargs="?",
+        help="Account number, ID, label, or email to inspect",
+    )
+    codex_usage_parser.add_argument(
         "--all", dest="all_accounts", action="store_true", help="Show usage for all managed accounts"
     )
     codex_usage_parser.set_defaults(func=codex_usage)
+
+    codex_sync_parser = codex_subparsers.add_parser(
+        "sync-auth",
+        help="Sync Codex OAuth credentials to OpenClaw and Hermes",
+    )
+    codex_sync_parser.add_argument(
+        "account",
+        nargs="?",
+        help="Account number, ID, label, or email to sync",
+    )
+    codex_sync_parser.add_argument("--email", default="", help="Sync a managed account selected by email")
+    codex_sync_parser.set_defaults(func=codex_sync_auth)
 
     _configure_codex_accounts_subcommands(codex_subparsers)
 
@@ -518,8 +598,17 @@ def main(argv: list[str] | None = None) -> int:
     open_parser = subparsers.add_parser("open", help="Show the floating island UI")
     open_parser.set_defaults(func=open_app)
 
+    toggle_parser = subparsers.add_parser("toggle", help="Toggle island focus or restore the previous window")
+    toggle_parser.set_defaults(func=toggle_app)
+
     settings_parser = subparsers.add_parser("settings", help="Open the settings window")
     settings_parser.set_defaults(func=open_settings)
+
+    highlight_parser = subparsers.add_parser(
+        "highlight-selected",
+        help="Toggle highlight on the currently selected session",
+    )
+    highlight_parser.set_defaults(func=highlight_selected)
 
     status_parser = subparsers.add_parser("status", help="Show the current service and D-Bus status")
     status_parser.set_defaults(func=status)

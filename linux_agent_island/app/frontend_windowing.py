@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 
@@ -20,6 +21,7 @@ from .frontend_presenter import compute_window_position_for_width, parse_workare
 _TOP_BAR_OFFSET_CACHE_TTL_SECONDS = 1.0
 _top_bar_offset_cache_value = 0
 _top_bar_offset_cache_ts = 0.0
+_HEX_WINDOW_ID_RE = re.compile(r"0x[0-9a-fA-F]+")
 
 
 def top_bar_offset() -> int:
@@ -124,9 +126,55 @@ def set_x11_above_state(xid: int) -> None:
 
 
 def activate_x11_window(xid: int) -> bool:
+    return activate_window_by_id(hex(xid))
+
+
+def active_window_id() -> str | None:
     try:
         result = subprocess.run(
-            ["wmctrl", "-i", "-a", hex(xid)],
+            ["xprop", "-root", "_NET_ACTIVE_WINDOW"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+    except OSError:
+        return None
+    output = result.stdout.strip() or result.stderr.strip()
+    match = _HEX_WINDOW_ID_RE.search(output)
+    if match is None:
+        return None
+    try:
+        window_id = int(match.group(0), 16)
+    except ValueError:
+        return None
+    if window_id == 0:
+        return None
+    return hex(window_id)
+
+
+def window_x11_id(window: Gtk.ApplicationWindow | None) -> str | None:
+    if window is None:
+        return None
+    surface = window.get_surface()
+    if surface is None:
+        return None
+    if GdkX11 is not None and isinstance(surface, GdkX11.X11Surface):
+        return hex(surface.get_xid())
+    return None
+
+
+def is_window_active(window: Gtk.ApplicationWindow | None) -> bool:
+    window_id = window_x11_id(window)
+    return window_id is not None and active_window_id() == window_id
+
+
+def activate_window_by_id(window_id: str | None) -> bool:
+    if not window_id:
+        return False
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-i", "-a", window_id],
             capture_output=True,
             text=True,
             timeout=1,
@@ -145,9 +193,11 @@ def focus_window(window: Gtk.ApplicationWindow | None) -> bool:
     if surface is None:
         return False
     if GdkX11 is not None and isinstance(surface, GdkX11.X11Surface):
-        xid = surface.get_xid()
-        set_x11_above_state(xid)
-        return activate_x11_window(xid)
+        window_id = window_x11_id(window)
+        if window_id is None:
+            return False
+        set_x11_above_state(surface.get_xid())
+        return activate_window_by_id(window_id)
     return True
 
 

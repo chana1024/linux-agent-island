@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _DEVICE_LOGIN_TIMEOUT_SECONDS = 900
 _DEVICE_LOGIN_POLL_INTERVAL_SECONDS = 0.2
+_OPENCLAW_PROFILE_ID = "openai-codex:default"
 _GUI_ENV_KEYS = (
     "DISPLAY",
     "XAUTHORITY",
@@ -44,6 +45,7 @@ class _StoredCodexAccount:
     created_at: int
     updated_at: int
     auth_fingerprint: str
+    identity_key: str = ""
     is_default: bool = False
 
     def to_dict(self) -> dict[str, object]:
@@ -53,6 +55,7 @@ class _StoredCodexAccount:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "auth_fingerprint": self.auth_fingerprint,
+            "identity_key": self.identity_key,
             "is_default": self.is_default,
         }
 
@@ -64,6 +67,7 @@ class _StoredCodexAccount:
             created_at=int(payload.get("created_at", 0)),
             updated_at=int(payload.get("updated_at", 0)),
             auth_fingerprint=str(payload.get("auth_fingerprint", "")),
+            identity_key=str(payload.get("identity_key", "")),
             is_default=bool(payload.get("is_default", False)),
         )
 
@@ -77,6 +81,14 @@ class _UsageTarget:
     cached_usage: CodexUsageInfo | None
 
 
+@dataclass(slots=True)
+class CodexCredentialSyncResult:
+    account_label: str | None
+    account_email: str | None
+    openclaw_paths: tuple[Path, ...]
+    hermes_auth_path: Path
+
+
 class CodexAccountService:
     def __init__(
         self,
@@ -86,6 +98,8 @@ class CodexAccountService:
         configured_codex_bin: str = "",
         launch_login: Callable[[str], subprocess.Popen[object]] | None = None,
         now: Callable[[], int] | None = None,
+        openclaw_auth_profile_paths: tuple[Path, ...] | None = None,
+        hermes_auth_path: Path | None = None,
     ) -> None:
         self.auth_path = auth_path
         self.accounts_dir = accounts_dir
@@ -93,6 +107,11 @@ class CodexAccountService:
         self.configured_codex_bin = configured_codex_bin.strip()
         self.launch_login = launch_login or self._launch_login_terminal
         self.now = now or (lambda: int(time.time()))
+        self.openclaw_auth_profile_paths = openclaw_auth_profile_paths or (
+            Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json",
+            Path.home() / ".openclaw" / "agents" / "codex" / "agent" / "auth-profiles.json",
+        )
+        self.hermes_auth_path = hermes_auth_path or (Path.home() / ".hermes" / "auth.json")
         self._lock = threading.Lock()
         self._login_in_progress = False
 
@@ -103,13 +122,12 @@ class CodexAccountService:
                 return self._summaries_from_stored_locked(stored_accounts)
 
     def get_status(self, sessions: list[AgentSession] | None = None) -> CodexAccountStatus:
-        device_login_in_progress = self._shared_login_in_progress()
+        device_login_in_progress = self._login_in_progress or self._shared_login_in_progress()
         with self._locked_accounts_io():
             with self._lock:
                 stored_accounts = self._load_accounts_locked()
                 auth_payload = self._read_auth_payload()
-                current_fingerprint = self._fingerprint_payload(auth_payload) if auth_payload is not None else None
-                active_account = self._find_account_by_fingerprint(stored_accounts, current_fingerprint)
+                active_account = self._find_account_by_payload(stored_accounts, auth_payload)
                 summaries = self._summaries_from_stored_locked(stored_accounts)
                 has_running_codex_sessions = any(
                     session.provider == "codex" and session.is_visible_in_island
@@ -148,8 +166,7 @@ class CodexAccountService:
             with self._lock:
                 stored_accounts = self._load_accounts_locked()
                 auth_payload = self._read_auth_payload()
-                current_fingerprint = self._fingerprint_payload(auth_payload) if auth_payload is not None else None
-                active_account = self._find_account_by_fingerprint(stored_accounts, current_fingerprint)
+                active_account = self._find_account_by_payload(stored_accounts, auth_payload)
                 if active_account is not None and active_account.account_id == account_id:
                     raise ValueError("cannot delete the active Codex account")
                 remaining = [account for account in stored_accounts if account.account_id != account_id]
@@ -184,6 +201,27 @@ class CodexAccountService:
             is_default=imported.is_default,
             is_active=True,
             has_credentials=self._snapshot_path(imported.account_id).exists(),
+        )
+
+    def sync_credentials(self, account_selector: str | None = None) -> CodexCredentialSyncResult:
+        auth_payload, account = self._resolve_sync_payload(account_selector)
+        tokens = self._sync_tokens_from_payload(auth_payload)
+        account_email = self._email_from_auth_payload(auth_payload)
+        account_label = account.label if account is not None else account_email
+        self._sync_openclaw_auth(tokens)
+        self._sync_hermes_auth(tokens, self._string_claim(auth_payload, "last_refresh"), self._auth_mode(auth_payload))
+        logger.info(
+            "synced Codex credentials account_label=%s account_email=%s openclaw_targets=%s hermes_auth_path=%s",
+            account_label or "<none>",
+            account_email or "<none>",
+            [str(path) for path in self.openclaw_auth_profile_paths],
+            self.hermes_auth_path,
+        )
+        return CodexCredentialSyncResult(
+            account_label=account_label,
+            account_email=account_email,
+            openclaw_paths=self.openclaw_auth_profile_paths,
+            hermes_auth_path=self.hermes_auth_path,
         )
 
     def switch_account(self, account_selector: str) -> CodexAccountStatus:
@@ -234,7 +272,7 @@ class CodexAccountService:
                 else:
                     auth_payload = self._read_auth_payload()
                     auth_fingerprint = self._fingerprint_payload(auth_payload) if auth_payload is not None else ""
-                    target_account = self._find_account_by_fingerprint(stored_accounts, auth_fingerprint or None)
+                    target_account = self._find_account_by_payload(stored_accounts, auth_payload)
                     cache_key = (
                         target_account.account_id
                         if target_account is not None
@@ -252,6 +290,32 @@ class CodexAccountService:
                     cached_usage=self._read_usage_cache(cache_key, auth_fingerprint),
                 )
 
+    def _resolve_sync_payload(
+        self,
+        account_selector: str | None,
+    ) -> tuple[dict[str, object], _StoredCodexAccount | None]:
+        with self._locked_accounts_io():
+            with self._lock:
+                stored_accounts = self._load_accounts_locked()
+                current_auth_payload = self._read_auth_payload()
+                if account_selector:
+                    normalized_selector = account_selector.strip()
+                    if not normalized_selector:
+                        raise ValueError("Codex account selector is required")
+                    if self._auth_payload_has_credentials(current_auth_payload):
+                        current_email = self._email_from_auth_payload(current_auth_payload)
+                        if current_email is not None and current_email.casefold() == normalized_selector.casefold():
+                            return current_auth_payload, self._find_account_by_payload(stored_accounts, current_auth_payload)
+                    account = self._require_account(stored_accounts, normalized_selector)
+                    auth_payload = self._read_payload_from_path(self._snapshot_path(account.account_id))
+                    if auth_payload is None or not self._auth_payload_has_credentials(auth_payload):
+                        raise ValueError("stored credentials are missing")
+                    return auth_payload, account
+
+                if current_auth_payload is None or not self._auth_payload_has_credentials(current_auth_payload):
+                    raise ValueError("Codex is not logged in")
+                return current_auth_payload, self._find_account_by_payload(stored_accounts, current_auth_payload)
+
     def start_device_login(
         self,
         label: str | None = None,
@@ -260,8 +324,8 @@ class CodexAccountService:
         login_label = (label or "").strip()
         with self._locked_accounts_io():
             with self._lock:
-                if self._shared_login_in_progress():
-                    logger.info("Codex device login request ignored because a login is already in progress")
+                if self._login_in_progress or self._shared_login_in_progress():
+                    logger.info("Codex login request ignored because a login is already in progress")
                     return False
                 self._login_in_progress = True
         watcher = threading.Thread(
@@ -273,10 +337,13 @@ class CodexAccountService:
         return True
 
     def run_device_login(self, label: str | None = None) -> bool:
+        return self._run_device_login(label)
+
+    def _run_device_login(self, label: str | None = None, *, local_slot_reserved: bool = False) -> bool:
         login_label = (label or "").strip()
         with self._locked_accounts_io():
             with self._lock:
-                if self._shared_login_in_progress():
+                if (self._login_in_progress and not local_slot_reserved) or self._shared_login_in_progress():
                     raise ValueError("Codex login already in progress")
                 self._login_in_progress = True
                 self._write_shared_login_state_locked(os.getpid())
@@ -286,7 +353,7 @@ class CodexAccountService:
         success = False
         try:
             logger.info(
-                "starting Codex device login label=%s auth_path=%s status_path=%s shell_command=%s",
+                "starting Codex login label=%s auth_path=%s status_path=%s shell_command=%s",
                 login_label or "<auto>",
                 self.auth_path,
                 status_path,
@@ -294,7 +361,7 @@ class CodexAccountService:
             )
             process = self.launch_login(self._login_shell_command(status_path))
             logger.info(
-                "Codex device login terminal launched pid=%s label=%s",
+                "Codex login terminal launched pid=%s label=%s",
                 getattr(process, "pid", None),
                 login_label or "<auto>",
             )
@@ -308,7 +375,7 @@ class CodexAccountService:
                         self._restore_login_backup_locked(backup_path)
                     self._cleanup_login_status(status_path)
                     self._clear_shared_login_state_locked()
-            logger.info("Codex device login completed success=%s label=%s", success, login_label or "<auto>")
+            logger.info("Codex login completed success=%s label=%s", success, login_label or "<auto>")
 
     def _run_device_login_background(
         self,
@@ -317,9 +384,9 @@ class CodexAccountService:
     ) -> None:
         success = False
         try:
-            success = self.run_device_login(label)
+            success = self._run_device_login(label, local_slot_reserved=True)
         except Exception:
-            logger.exception("Codex device login watcher failed")
+            logger.exception("Codex login watcher failed")
         finally:
             if on_complete is not None:
                 on_complete(success)
@@ -331,19 +398,23 @@ class CodexAccountService:
         backup_path: Path | None,
         status_path: Path,
     ) -> bool:
-        return_code = self._wait_for_login_result(process, status_path)
-        auth_payload = self._read_auth_payload()
-        has_credentials = self._auth_payload_has_credentials(auth_payload)
+        previous_auth_payload = self._read_payload_from_path(backup_path) if backup_path is not None else None
+        return_code, auth_payload = self._wait_for_login_credentials(
+            process,
+            status_path,
+            previous_auth_payload,
+        )
+        has_credentials = auth_payload is not None and self._auth_payload_has_credentials(auth_payload)
         logger.info(
-            "Codex device login process finished pid=%s return_code=%s has_credentials=%s auth_summary=%s",
+            "Codex login process finished pid=%s return_code=%s has_credentials=%s auth_summary=%s",
             getattr(process, "pid", None),
             return_code,
             has_credentials,
             self._auth_payload_debug_summary(auth_payload),
         )
-        if return_code != 0 or not has_credentials:
+        if not has_credentials:
             logger.warning(
-                "Codex device login did not produce importable credentials pid=%s return_code=%s auth_path_exists=%s",
+                "Codex login did not produce importable credentials pid=%s return_code=%s auth_path_exists=%s",
                 getattr(process, "pid", None),
                 return_code,
                 self.auth_path.exists(),
@@ -358,7 +429,7 @@ class CodexAccountService:
                 )
                 self._cleanup_login_backup_locked(backup_path)
         logger.info(
-            "Codex device login imported account account_id=%s label=%s",
+            "Codex login imported account account_id=%s label=%s",
             imported.account_id,
             imported.label,
         )
@@ -366,7 +437,7 @@ class CodexAccountService:
 
     def _summaries_from_stored_locked(self, stored_accounts: list[_StoredCodexAccount]) -> list[CodexAccountSummary]:
         auth_payload = self._read_auth_payload()
-        current_fingerprint = self._fingerprint_payload(auth_payload) if auth_payload is not None else None
+        active_account = self._find_account_by_payload(stored_accounts, auth_payload)
         summaries: list[CodexAccountSummary] = []
         for account in stored_accounts:
             summaries.append(
@@ -374,7 +445,7 @@ class CodexAccountService:
                     account_id=account.account_id,
                     label=account.label,
                     is_default=account.is_default,
-                    is_active=account.auth_fingerprint == current_fingerprint,
+                    is_active=active_account is not None and account.account_id == active_account.account_id,
                     has_credentials=self._snapshot_path(account.account_id).exists(),
                 )
             )
@@ -395,10 +466,11 @@ class CodexAccountService:
                 if isinstance(item, dict)
             ]
         stored_accounts = [account for account in stored_accounts if account.account_id]
-        stored_accounts.sort(key=lambda account: (not account.is_default, account.created_at, account.account_id))
         auth_payload = self._read_auth_payload()
         if auth_payload is not None and self._auth_payload_has_credentials(auth_payload) and not stored_accounts:
             self._import_current_auth_locked(stored_accounts, "")
+        stored_accounts = self._deduplicate_accounts_locked(stored_accounts)
+        stored_accounts.sort(key=lambda account: (not account.is_default, account.created_at, account.account_id))
         return stored_accounts
 
     def _save_accounts_locked(self, stored_accounts: list[_StoredCodexAccount]) -> None:
@@ -411,13 +483,19 @@ class CodexAccountService:
         if auth_payload is None or not self._auth_payload_has_credentials(auth_payload):
             raise ValueError("Codex is not logged in")
         fingerprint = self._fingerprint_payload(auth_payload)
+        identity_key = self._identity_key_from_auth_payload(auth_payload) or ""
         resolved_label = self._preferred_account_label(auth_payload, stored_accounts, label)
         existing = self._find_account_by_fingerprint(stored_accounts, fingerprint)
+        if existing is None:
+            existing = self._find_account_by_identity(stored_accounts, identity_key)
         now_ts = self.now()
         if existing is not None:
             if label:
                 existing.label = resolved_label
             existing.updated_at = now_ts
+            existing.auth_fingerprint = fingerprint
+            if identity_key:
+                existing.identity_key = identity_key
             snapshot_path = self._snapshot_path(existing.account_id)
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(json.dumps(auth_payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -430,6 +508,7 @@ class CodexAccountService:
             created_at=now_ts,
             updated_at=now_ts,
             auth_fingerprint=fingerprint,
+            identity_key=identity_key,
             is_default=not stored_accounts,
         )
         stored_accounts.append(account)
@@ -448,6 +527,10 @@ class CodexAccountService:
         normalized_selector = account_selector.strip()
         if not normalized_selector:
             raise ValueError("Codex account selector is required")
+
+        ordinal_account = self._account_by_ordinal(stored_accounts, normalized_selector)
+        if ordinal_account is not None:
+            return ordinal_account
 
         for account in stored_accounts:
             if account.account_id == normalized_selector:
@@ -470,6 +553,18 @@ class CodexAccountService:
             raise ValueError(f"multiple Codex accounts match: {account_selector}")
         raise ValueError(f"unknown Codex account: {account_selector}")
 
+    def _account_by_ordinal(
+        self,
+        stored_accounts: list[_StoredCodexAccount],
+        account_selector: str,
+    ) -> _StoredCodexAccount | None:
+        if not account_selector.isdecimal():
+            return None
+        ordinal = int(account_selector)
+        if 1 <= ordinal <= len(stored_accounts):
+            return stored_accounts[ordinal - 1]
+        return None
+
     def _find_account_by_fingerprint(
         self,
         stored_accounts: list[_StoredCodexAccount],
@@ -481,6 +576,116 @@ class CodexAccountService:
             if account.auth_fingerprint == fingerprint:
                 return account
         return None
+
+    def _find_account_by_payload(
+        self,
+        stored_accounts: list[_StoredCodexAccount],
+        payload: dict[str, object] | None,
+    ) -> _StoredCodexAccount | None:
+        if payload is None or not self._auth_payload_has_credentials(payload):
+            return None
+        fingerprint = self._fingerprint_payload(payload)
+        by_fingerprint = self._find_account_by_fingerprint(stored_accounts, fingerprint)
+        if by_fingerprint is not None:
+            return by_fingerprint
+        return self._find_account_by_identity(stored_accounts, self._identity_key_from_auth_payload(payload))
+
+    def _find_account_by_identity(
+        self,
+        stored_accounts: list[_StoredCodexAccount],
+        identity_key: str | None,
+    ) -> _StoredCodexAccount | None:
+        normalized_identity = identity_key.strip() if isinstance(identity_key, str) else ""
+        if not normalized_identity:
+            return None
+        for account in stored_accounts:
+            account_identity = self._identity_key_for_account(account)
+            if account_identity == normalized_identity:
+                return account
+        return None
+
+    def _identity_key_for_account(self, account: _StoredCodexAccount) -> str:
+        if account.identity_key.strip():
+            return account.identity_key.strip()
+        payload = self._read_payload_from_path(self._snapshot_path(account.account_id))
+        return self._identity_key_from_auth_payload(payload) or ""
+
+    def _identity_key_from_auth_payload(self, payload: dict[str, object] | None) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        account_id = self._token_account_id(payload)
+        if account_id:
+            return f"account_id:{account_id}"
+        for token_key in ("id_token", "access_token"):
+            claims = self._jwt_payload(self._token_value(payload, token_key))
+            if not claims:
+                continue
+            subject = claims.get("sub")
+            if isinstance(subject, str) and subject.strip():
+                return f"sub:{subject.strip()}"
+        email = self._email_from_auth_payload(payload)
+        if email:
+            return f"email:{email.casefold()}"
+        return None
+
+    def _deduplicate_accounts_locked(self, stored_accounts: list[_StoredCodexAccount]) -> list[_StoredCodexAccount]:
+        deduplicated: list[_StoredCodexAccount] = []
+        changed = False
+        for account in stored_accounts:
+            identity_key = self._identity_key_for_account(account)
+            if identity_key and account.identity_key != identity_key:
+                account.identity_key = identity_key
+                changed = True
+            duplicate = None
+            for existing in deduplicated:
+                if identity_key and self._identity_key_for_account(existing) == identity_key:
+                    duplicate = existing
+                    break
+                if not identity_key and account.auth_fingerprint and existing.auth_fingerprint == account.auth_fingerprint:
+                    duplicate = existing
+                    break
+            if duplicate is None:
+                deduplicated.append(account)
+                continue
+            changed = True
+            self._merge_duplicate_account_locked(duplicate, account)
+
+        if deduplicated and not any(account.is_default for account in deduplicated):
+            deduplicated[0].is_default = True
+            changed = True
+        if changed:
+            self._save_accounts_locked(deduplicated)
+        return deduplicated
+
+    def _merge_duplicate_account_locked(
+        self,
+        target: _StoredCodexAccount,
+        duplicate: _StoredCodexAccount,
+    ) -> None:
+        target_snapshot = self._snapshot_path(target.account_id)
+        duplicate_snapshot = self._snapshot_path(duplicate.account_id)
+        replace_target_snapshot = duplicate_snapshot.exists() and (
+            not target_snapshot.exists() or duplicate.updated_at >= target.updated_at
+        )
+        target.created_at = min(target.created_at, duplicate.created_at)
+        if duplicate.updated_at >= target.updated_at:
+            target.updated_at = duplicate.updated_at
+            if duplicate.auth_fingerprint:
+                target.auth_fingerprint = duplicate.auth_fingerprint
+        else:
+            target.updated_at = max(target.updated_at, duplicate.updated_at)
+        if duplicate.is_default:
+            target.is_default = True
+        if not target.label.strip() and duplicate.label.strip():
+            target.label = duplicate.label
+        if not target.identity_key.strip():
+            target.identity_key = self._identity_key_for_account(duplicate)
+        if replace_target_snapshot:
+            target_snapshot.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(duplicate_snapshot, target_snapshot)
+            target_snapshot.chmod(0o600)
+        if duplicate_snapshot.exists():
+            duplicate_snapshot.unlink()
 
     def _snapshot_path(self, account_id: str) -> Path:
         return self.accounts_dir / f"{account_id}.json"
@@ -539,6 +744,116 @@ class CodexAccountService:
         if payload is None:
             return None
         return self._email_from_auth_payload(payload)
+
+    def _sync_tokens_from_payload(self, payload: dict[str, object]) -> dict[str, str]:
+        raw_tokens = payload.get("tokens")
+        if not isinstance(raw_tokens, dict):
+            raise ValueError("Codex auth is missing tokens")
+        tokens = {
+            key: value.strip()
+            for key, value in raw_tokens.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        if not access_token:
+            raise ValueError("Codex auth is missing access token")
+        if not refresh_token:
+            raise ValueError("Codex auth is missing refresh token")
+        account_id = tokens.get("account_id") or self._token_account_id(payload) or self._token_subject(payload, "access_token")
+        if not account_id:
+            raise ValueError("Codex auth is missing account ID")
+        tokens["account_id"] = account_id
+        return tokens
+
+    def _sync_openclaw_auth(self, tokens: dict[str, str]) -> None:
+        profile_payload = self._openclaw_profile_payload(tokens)
+        for path in self.openclaw_auth_profile_paths:
+            target = self._read_json_object(path)
+            profiles = target.get("profiles")
+            if not isinstance(profiles, dict):
+                profiles = {}
+                target["profiles"] = profiles
+            existing = profiles.get(_OPENCLAW_PROFILE_ID)
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(profile_payload)
+            profiles[_OPENCLAW_PROFILE_ID] = merged
+            defaults = target.get("defaults")
+            if not isinstance(defaults, dict):
+                defaults = {}
+                target["defaults"] = defaults
+            defaults["openai-codex"] = _OPENCLAW_PROFILE_ID
+            target.setdefault("version", 1)
+            self._atomic_write_json(path, target)
+            self._sync_openclaw_runtime_state(path)
+
+    def _openclaw_profile_payload(self, tokens: dict[str, str]) -> dict[str, object]:
+        access_token = tokens["access_token"]
+        return {
+            "type": "oauth",
+            "provider": "openai-codex",
+            "access": access_token,
+            "refresh": tokens["refresh_token"],
+            "expires": self._jwt_exp_ms(access_token),
+            "accountId": tokens["account_id"],
+            "managedBy": "codex-cli",
+        }
+
+    def _sync_openclaw_runtime_state(self, profile_path: Path) -> None:
+        state_path = profile_path.with_name("auth-state.json")
+        state = self._read_json_object(state_path)
+        last_good = state.get("lastGood")
+        if not isinstance(last_good, dict):
+            last_good = {}
+        last_good["openai-codex"] = _OPENCLAW_PROFILE_ID
+        state["lastGood"] = last_good
+
+        usage_stats = state.get("usageStats")
+        if isinstance(usage_stats, dict) and _OPENCLAW_PROFILE_ID in usage_stats:
+            del usage_stats[_OPENCLAW_PROFILE_ID]
+            if usage_stats:
+                state["usageStats"] = usage_stats
+            else:
+                state.pop("usageStats", None)
+
+        state.setdefault("version", 1)
+        self._atomic_write_json(state_path, state)
+
+    def _sync_hermes_auth(self, tokens: dict[str, str], last_refresh: str | None, auth_mode: str | None) -> None:
+        auth_store = self._read_json_object(self.hermes_auth_path)
+        providers = auth_store.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+            auth_store["providers"] = providers
+        state = providers.get("openai-codex")
+        if not isinstance(state, dict):
+            state = {}
+        state["tokens"] = dict(tokens)
+        state["last_refresh"] = last_refresh or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        state["auth_mode"] = auth_mode or "chatgpt"
+        providers["openai-codex"] = state
+        auth_store["active_provider"] = "openai-codex"
+        auth_store.setdefault("version", 1)
+        self._atomic_write_json(self.hermes_auth_path, auth_store)
+
+    def _read_json_object(self, path: Path) -> dict[str, object]:
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _atomic_write_json(self, path: Path, payload: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}")
+        temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temp_path, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
 
     def _lock_path(self) -> Path:
         return self.accounts_dir / ".accounts.lock"
@@ -807,6 +1122,13 @@ class CodexAccountService:
             return None
         return token_account_id
 
+    def _token_subject(self, payload: dict[str, object], token_key: str) -> str | None:
+        claims = self._jwt_payload(self._token_value(payload, token_key))
+        if not claims:
+            return None
+        subject = claims.get("sub")
+        return subject.strip() if isinstance(subject, str) and subject.strip() else None
+
     def _token_value(self, payload: dict[str, object], key: str) -> str | None:
         tokens = payload.get("tokens")
         if not isinstance(tokens, dict):
@@ -900,24 +1222,68 @@ class CodexAccountService:
                 return profile_email.strip()
         return None
 
-    def _wait_for_login_result(self, process: subprocess.Popen[object], status_path: Path) -> int | None:
+    def _jwt_exp_ms(self, token: str) -> int:
+        payload = self._jwt_payload(token)
+        if not payload:
+            raise ValueError("Codex access token is not a valid JWT")
+        exp = payload.get("exp")
+        if not isinstance(exp, int):
+            raise ValueError("Codex access token is missing expiration")
+        return exp * 1000
+
+    def _wait_for_login_credentials(
+        self,
+        process: subprocess.Popen[object],
+        status_path: Path,
+        previous_auth_payload: dict[str, object] | None,
+    ) -> tuple[int | None, dict[str, object] | None]:
+        previous_fingerprint = (
+            self._fingerprint_payload(previous_auth_payload)
+            if self._auth_payload_has_credentials(previous_auth_payload)
+            else None
+        )
         wait_method = getattr(process, "wait", None)
         poll_method = getattr(process, "poll", None)
-        if not callable(poll_method) and callable(wait_method):
-            return int(wait_method())
-
         deadline = time.monotonic() + _DEVICE_LOGIN_TIMEOUT_SECONDS
+        launcher_return_code: int | None = None
         launcher_exit_logged = False
-        while time.monotonic() < deadline:
-            status = self._read_login_status(status_path)
-            if status is not None:
-                return status
 
+        if not callable(poll_method) and callable(wait_method):
+            launcher_return_code = int(wait_method())
+            logger.info(
+                "Codex login launcher exited pid=%s return_code=%s status_path=%s",
+                getattr(process, "pid", None),
+                launcher_return_code,
+                status_path,
+            )
+            launcher_exit_logged = True
+            auth_payload = self._read_auth_payload()
+            if self._is_new_login_auth_payload(auth_payload, previous_fingerprint):
+                return launcher_return_code, auth_payload
+            if launcher_return_code != 0 and not status_path.exists():
+                return launcher_return_code, None
+            deadline = min(deadline, time.monotonic() + max(0.1, _DEVICE_LOGIN_POLL_INTERVAL_SECONDS * 10))
+
+        while time.monotonic() < deadline:
+            auth_payload = self._read_auth_payload()
+            if self._is_new_login_auth_payload(auth_payload, previous_fingerprint):
+                return launcher_return_code, auth_payload
+
+            status = self._read_login_status(status_path)
+            if status is not None and launcher_return_code is None:
+                launcher_return_code = status
+                logger.info(
+                    "Codex login launcher status observed pid=%s return_code=%s status_path=%s",
+                    getattr(process, "pid", None),
+                    launcher_return_code,
+                    status_path,
+                )
             if callable(poll_method):
-                launcher_return_code = poll_method()
-                if launcher_return_code is not None and not launcher_exit_logged:
+                polled_return_code = poll_method()
+                if polled_return_code is not None and not launcher_exit_logged:
+                    launcher_return_code = polled_return_code
                     logger.info(
-                        "Codex login launcher exited before status file pid=%s return_code=%s status_path=%s",
+                        "Codex login launcher exited pid=%s return_code=%s status_path=%s",
                         getattr(process, "pid", None),
                         launcher_return_code,
                         status_path,
@@ -925,8 +1291,28 @@ class CodexAccountService:
                     launcher_exit_logged = True
             time.sleep(_DEVICE_LOGIN_POLL_INTERVAL_SECONDS)
 
-        logger.warning("Codex login status file timed out status_path=%s", status_path)
-        return None
+        auth_payload = self._read_auth_payload()
+        if self._is_new_login_auth_payload(auth_payload, previous_fingerprint):
+            return launcher_return_code, auth_payload
+        logger.warning(
+            "Codex login timed out waiting for updated credentials status_path=%s return_code=%s",
+            status_path,
+            launcher_return_code,
+        )
+        return launcher_return_code, None
+
+    def _is_new_login_auth_payload(
+        self,
+        auth_payload: dict[str, object] | None,
+        previous_fingerprint: str | None,
+    ) -> bool:
+        if not self._auth_payload_has_credentials(auth_payload):
+            return False
+        if previous_fingerprint is None:
+            return True
+        if auth_payload is None:
+            return False
+        return self._fingerprint_payload(auth_payload) != previous_fingerprint
 
     def _read_login_status(self, status_path: Path) -> int | None:
         if not status_path.exists():
@@ -947,7 +1333,7 @@ class CodexAccountService:
         resolved_codex_executable = self._resolve_codex_executable()
         codex_executable = shlex.quote(resolved_codex_executable)
         codex_bin_dir = shlex.quote(str(Path(resolved_codex_executable).expanduser().parent))
-        base_command = f"{codex_executable} login --device-auth"
+        base_command = f"{codex_executable} login"
         prefixed_command = f"export PATH={codex_bin_dir}:$PATH; {base_command}"
         if status_path is None:
             return prefixed_command

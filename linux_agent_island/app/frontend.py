@@ -22,11 +22,13 @@ from .frontend_controls import (
     REVEAL_START_DELAY_MS,
     REVEAL_TRANSITION_MS,
     TRANSCRIPT_REFRESH_MS,
+    key_state_has_control,
     key_state_has_shift,
     moved_selection_key,
     navigation_delta_for_key,
     should_activate_selected_for_key,
     should_collapse_layer_for_key,
+    should_toggle_highlight_for_key,
 )
 from .frontend_interactions import FrontendInteractionsMixin
 from .frontend_panel import FrontendPanelMixin
@@ -298,6 +300,7 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         self.highlighted_until: dict[SessionKey, int] = {}
         self.pending_scroll_session: SessionKey | None = None
         self.highlight_timeout_id: int | None = None
+        self.last_external_window_id: str | None = None
         self.proxy: Gio.DBusProxy | None = None
         self.settings = FrontendSettings()
         self.codex_account_status = CodexAccountStatus(logged_in=False)
@@ -307,6 +310,8 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         for name, callback in [
             ("show-island", self._action_show_island),
             ("hide-island", self._action_hide_island),
+            ("toggle-island-focus", self._action_toggle_island_focus),
+            ("toggle-highlight-selected", self._action_toggle_highlight_selected),
             ("open-settings", self._action_open_settings),
             ("quit-service", self._action_quit_service),
         ]:
@@ -350,6 +355,12 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
     def _action_hide_island(self, *_args: object) -> None:
         if self.window is not None:
             self.window.hide()
+
+    def _action_toggle_island_focus(self, *_args: object) -> None:
+        self._toggle_island_focus()
+
+    def _action_toggle_highlight_selected(self, *_args: object) -> None:
+        self._toggle_highlight_selected()
 
     def _action_open_settings(self, *_args: object) -> None:
         self._open_settings_window()
@@ -407,6 +418,8 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         _keycode: int,
         state: Gdk.ModifierType,
     ) -> bool:
+        if should_toggle_highlight_for_key(keyval, state):
+            return self._toggle_highlight_selected()
         delta = navigation_delta_for_key(keyval)
         if delta is not None:
             return self._move_selected_session(delta)

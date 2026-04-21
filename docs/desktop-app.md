@@ -25,6 +25,7 @@ Important runtime files:
 sessions.json
 logs/backend.log
 logs/frontend.log
+logs/hotkeys.log
 logs/tray.log
 logs/daemon.log
 events.sock
@@ -64,17 +65,22 @@ Available commands:
 
 ```bash
 lai open
+lai toggle
 lai settings
 lai status
 linux-agent-island daemon
 linux-agent-island open
+linux-agent-island toggle
 linux-agent-island settings
 linux-agent-island status
+linux-agent-island highlight-selected
 linux-agent-island codex login --label Work
 linux-agent-island codex status
 linux-agent-island codex usage
+linux-agent-island codex usage <account>
+linux-agent-island codex sync-auth <account>
 linux-agent-island codex accounts list
-linux-agent-island codex accounts switch <account-id>
+linux-agent-island codex accounts switch <account>
 linux-agent-island codex accounts rename <account-id> <label>
 linux-agent-island codex accounts set-default <account-id>
 linux-agent-island codex accounts delete <account-id>
@@ -83,7 +89,12 @@ linux-agent-island install-hooks
 linux-agent-island uninstall-hooks
 ```
 
-`lai` is a short alias for the main CLI entry point, so all subcommands are available through either command name. The Codex account login button in the settings window does not own a separate login implementation anymore. It calls the backend D-Bus `StartCodexDeviceLogin` method, and the backend launches `linux-agent-island codex login` asynchronously. The CLI owns the full login lifecycle, writes shared login-state metadata under `~/.config/linux-agent-island/codex-accounts/`, and the UI refreshes when the CLI exits. Keeping Codex actions under a dedicated `codex` command group leaves room for future subcommands without bloating the top-level CLI. The legacy `linux-agent-island codex-login` alias still works, but now warns that it is deprecated.
+`lai` is a short alias for the main CLI entry point, so all subcommands are available through either command name. The Codex account login button in the settings window does not own a separate login implementation anymore. It calls the backend D-Bus `StartCodexDeviceLogin` method, and the backend launches regular `linux-agent-island codex login` asynchronously. The CLI owns the full login lifecycle, writes shared login-state metadata under `~/.config/linux-agent-island/codex-accounts/`, and the UI refreshes when the CLI exits. Keeping Codex actions under a dedicated `codex` command group leaves room for future subcommands without bloating the top-level CLI. The legacy `linux-agent-island codex-login` alias still works, but now warns that it is deprecated.
+
+Keyboard shortcuts:
+
+- Global `Ctrl+I`: focus the island; if the island is already active, hide it and restore the previous X11 window.
+- Window-local `Ctrl+H`: toggle highlight on the selected session row.
 
 Default labels for imported Codex accounts prefer the locally decoded token email in this order: `id_token.email`, `access_token.email`, `access_token["https://api.openai.com/profile"].email`, then fallback names.
 

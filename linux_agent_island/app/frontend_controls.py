@@ -32,6 +32,14 @@ def key_state_has_shift(state: Gdk.ModifierType) -> bool:
     return bool(state & Gdk.ModifierType.SHIFT_MASK)
 
 
+def key_state_has_control(state: Gdk.ModifierType) -> bool:
+    return bool(state & Gdk.ModifierType.CONTROL_MASK)
+
+
+def should_toggle_highlight_for_key(keyval: int, state: Gdk.ModifierType) -> bool:
+    return key_state_has_control(state) and keyval in {Gdk.KEY_h, Gdk.KEY_H}
+
+
 def moved_selection_key(
     current_key: tuple[str, str] | None,
     ordered_keys: list[tuple[str, str]],

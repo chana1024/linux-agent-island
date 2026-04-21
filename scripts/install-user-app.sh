@@ -38,6 +38,10 @@ try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
 except ValueError as exc:
     raise SystemExit(str(exc))
+try:
+    import Xlib.display  # noqa: F401
+except ImportError as exc:
+    raise SystemExit(str(exc))
 PY
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$CONFIG_SYSTEMD_DIR" "$APPLICATIONS_DIR" "$ICON_DIR"

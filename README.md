@@ -44,7 +44,7 @@ Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-gdkx11-4.0 gir1.2-ayatanaappindicator3-0.1 wmctrl x11-utils libglib2.0-bin
+sudo apt install -y python3 python3-venv python3-gi python3-xlib gir1.2-gtk-4.0 gir1.2-gdkx11-4.0 gir1.2-ayatanaappindicator3-0.1 wmctrl x11-utils libglib2.0-bin
 ```
 
 You also need an X11 desktop session. Wayland is not supported yet.
@@ -64,14 +64,19 @@ The installer creates a user-level desktop app, a `systemd --user` service, and 
 
 ```bash
 lai open                                             # short alias for daily use
+lai toggle                                           # global-style toggle helper from CLI
 linux-agent-island open                              # show the island
+linux-agent-island toggle                            # show/focus island, or hide it and restore the previous window
 linux-agent-island settings                          # open settings
 linux-agent-island status                            # service and D-Bus status
+linux-agent-island highlight-selected                # toggle highlight on the selected session
 linux-agent-island codex login --label Work          # launch a Codex login flow from CLI
 linux-agent-island codex status                      # show current Codex auth/account state
 linux-agent-island codex usage                       # show current account usage and quota
+linux-agent-island codex usage <account>             # show usage by account number, ID, label, or email
+linux-agent-island codex sync-auth <account>         # sync credentials by account number, ID, label, or email
 linux-agent-island codex accounts list               # list managed Codex accounts
-linux-agent-island codex accounts switch <account>   # switch active managed account
+linux-agent-island codex accounts switch <account>   # switch by account number, ID, label, or email
 linux-agent-island codex accounts rename <id> <name> # rename a managed account
 linux-agent-island codex accounts set-default <id>   # change default account
 linux-agent-island codex accounts delete <id>        # delete a managed account snapshot
@@ -79,6 +84,11 @@ linux-agent-island codex accounts import-current     # import current ~/.codex/a
 ```
 
 `lai` is just a short alias for `linux-agent-island`, so every command works with either name. The settings UI uses the same login path internally through the backend D-Bus method: the backend starts `linux-agent-island codex login` asynchronously, then emits a Codex account status refresh when the CLI exits. The CLI now reserves the top-level `codex` namespace for future Codex subcommands instead of adding more flat command names. The old `linux-agent-island codex-login` alias still works for now, but it prints a deprecation warning and should be treated as legacy. Default account labels prefer the locally decoded token email (`id_token.email`, then `access_token.email`, then `access_token["https://api.openai.com/profile"].email`) before falling back to generic names.
+
+Keyboard shortcuts:
+
+- Global `Ctrl+I`: focus the island; if the island is already the active window, hide it and restore the previously active X11 window.
+- Window-local `Ctrl+H`: toggle highlight on the currently selected session.
 
 Useful service commands:
 

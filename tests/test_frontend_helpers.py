@@ -16,6 +16,7 @@ from linux_agent_island.frontend import (
     expanded_header_title,
     format_session_minutes,
     has_done_time_label,
+    key_state_has_control,
     moved_selection_key,
     key_state_has_shift,
     navigation_delta_for_key,
@@ -29,6 +30,7 @@ from linux_agent_island.frontend import (
     status_dot_glyph,
     should_activate_selected_for_key,
     should_collapse_layer_for_key,
+    should_toggle_highlight_for_key,
     summarize_visible_sessions,
     window_width_for_state,
 )
@@ -523,6 +525,14 @@ def test_shift_state_controls_jump_shortcut() -> None:
     assert key_state_has_shift(Gdk.ModifierType.CONTROL_MASK) is False
 
 
+def test_control_state_and_manual_highlight_shortcut() -> None:
+    assert key_state_has_control(Gdk.ModifierType.CONTROL_MASK) is True
+    assert key_state_has_control(Gdk.ModifierType.SHIFT_MASK) is False
+    assert should_toggle_highlight_for_key(Gdk.KEY_h, Gdk.ModifierType.CONTROL_MASK) is True
+    assert should_toggle_highlight_for_key(Gdk.KEY_H, Gdk.ModifierType.CONTROL_MASK) is True
+    assert should_toggle_highlight_for_key(Gdk.KEY_h, Gdk.ModifierType.SHIFT_MASK) is False
+
+
 def test_moved_selection_key_clamps_and_initializes_selection() -> None:
     keys = [("codex", "one"), ("codex", "two"), ("codex", "three")]
 
@@ -590,6 +600,89 @@ def test_focus_window_activates_x11_surface(monkeypatch) -> None:
         ("above", 0x03E00007),
         ["wmctrl", "-i", "-a", "0x3e00007"],
     ]
+
+
+def test_active_window_id_parses_x11_root_output(monkeypatch) -> None:
+    monkeypatch.setattr(
+        frontend_windowing.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="_NET_ACTIVE_WINDOW(WINDOW): window id # 0x03e00007\n", stderr=""),
+    )
+
+    assert frontend_windowing.active_window_id() == "0x3e00007"
+
+
+def test_toggle_highlight_selected_toggles_persistent_highlight(monkeypatch) -> None:
+    app = FrontendApp()
+    app.selected_session_key = ("codex", "selected")
+    renders: list[bool] = []
+    cleanups: list[bool] = []
+
+    monkeypatch.setattr(app, "_render", lambda: renders.append(True))
+    monkeypatch.setattr(app, "_schedule_highlight_cleanup", lambda: cleanups.append(True))
+
+    assert app._toggle_highlight_selected() is True
+    assert app.highlighted_until == {("codex", "selected"): 0}
+
+    assert app._toggle_highlight_selected() is True
+    assert app.highlighted_until == {}
+    assert renders == [True, True]
+    assert cleanups == [True, True]
+
+
+def test_toggle_highlight_selected_returns_false_without_selection() -> None:
+    app = FrontendApp()
+
+    assert app._toggle_highlight_selected() is False
+
+
+def test_toggle_island_focus_shows_and_remembers_previous_window(monkeypatch) -> None:
+    app = FrontendApp()
+    app.window = object()
+
+    focused: list[object] = []
+    activated: list[bool] = []
+    applied: list[bool] = []
+
+    monkeypatch.setattr("linux_agent_island.app.frontend_interactions.is_window_active", lambda _window: False)
+    monkeypatch.setattr("linux_agent_island.app.frontend_interactions.active_window_id", lambda: "0x123")
+    monkeypatch.setattr("linux_agent_island.app.frontend_interactions.window_x11_id", lambda _window: "0x456")
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.focus_window",
+        lambda window: focused.append(window) or True,
+    )
+    monkeypatch.setattr(app, "activate", lambda: activated.append(True))
+    monkeypatch.setattr(app, "_schedule_apply_window_state", lambda: applied.append(True))
+
+    assert app._toggle_island_focus() is True
+    assert app.last_external_window_id == "0x123"
+    assert focused == [app.window]
+    assert activated == [True]
+    assert applied == [True]
+
+
+def test_toggle_island_focus_hides_and_restores_previous_window(monkeypatch) -> None:
+    hidden: list[bool] = []
+
+    class FakeWindow:
+        def hide(self) -> None:
+            hidden.append(True)
+
+    app = FrontendApp()
+    app.window = FakeWindow()
+    app.last_external_window_id = "0x123"
+
+    restored: list[str | None] = []
+
+    monkeypatch.setattr("linux_agent_island.app.frontend_interactions.is_window_active", lambda _window: True)
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.activate_window_by_id",
+        lambda window_id: restored.append(window_id) or True,
+    )
+
+    assert app._toggle_island_focus() is True
+    assert hidden == [True]
+    assert restored == ["0x123"]
 
 
 def test_apply_session_update_focuses_island_on_completed_transition(monkeypatch) -> None:

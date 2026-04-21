@@ -25,13 +25,53 @@ from .frontend_presenter import (
     refresh_completion_highlights,
     session_key,
 )
-from .frontend_windowing import focus_window
+from .frontend_windowing import active_window_id, activate_window_by_id, focus_window, is_window_active, window_x11_id
 
 
 logger = logging.getLogger(__name__)
 
 
 class FrontendInteractionsMixin:
+    def _toggle_island_focus(self) -> bool:
+        if self.window is None:
+            return False
+
+        if is_window_active(self.window):
+            self.window.hide()
+            restored = activate_window_by_id(self.last_external_window_id)
+            logger.info(
+                "toggle island focus hid island restored_previous_window=%s previous_window_id=%s",
+                restored,
+                self.last_external_window_id or "<none>",
+            )
+            return True
+
+        current_active_window = active_window_id()
+        island_window_id = window_x11_id(self.window)
+        if current_active_window is not None and current_active_window != island_window_id:
+            self.last_external_window_id = current_active_window
+
+        self.activate()
+        focused = focus_window(self.window)
+        self._schedule_apply_window_state()
+        logger.info(
+            "toggle island focus showed island focus_requested=%s previous_window_id=%s",
+            focused,
+            self.last_external_window_id or "<none>",
+        )
+        return True
+
+    def _toggle_highlight_selected(self) -> bool:
+        if self.selected_session_key is None:
+            return False
+        if self.selected_session_key in self.highlighted_until:
+            self.highlighted_until.pop(self.selected_session_key, None)
+        else:
+            self.highlighted_until[self.selected_session_key] = 0
+        self._schedule_highlight_cleanup()
+        self._render()
+        return True
+
     def _toggle_expand(self, *_args: object) -> None:
         if self.expanded:
             self._collapse_panel_with_animation()
@@ -280,7 +320,7 @@ class FrontendInteractionsMixin:
             self._open_settings_window()
 
     def _start_codex_device_login(self, label: str = "") -> None:
-        logger.info("frontend requested Codex device login label=%s", label or "<auto>")
+        logger.info("frontend requested Codex login label=%s", label or "<auto>")
         start_codex_device_login_async(self.proxy, label, self._on_codex_device_login_started)
 
     def _switch_codex_account(self, account_id: str) -> None:
@@ -300,7 +340,7 @@ class FrontendInteractionsMixin:
         # The backend emits CodexAccountsChanged immediately after the login flow starts,
         # and again when the watcher imports the finished login. Avoid an extra sync D-Bus
         # round trip on the GTK thread here.
-        logger.info("frontend received Codex device login start result started=%s", _started)
+        logger.info("frontend received Codex login start result started=%s", _started)
         self._render()
         if self.settings_window is not None and self.settings_window.get_visible():
             self._open_settings_window()

@@ -1,10 +1,11 @@
 import json
 import os
 import threading
+import time
 from pathlib import Path
 import pwd as pwd_module
 
-from linux_agent_island.codex_accounts import CodexAccountService
+from linux_agent_island.codex_accounts import _OPENCLAW_PROFILE_ID, CodexAccountService
 from linux_agent_island.core.models import AgentSession, SessionPhase
 
 
@@ -26,6 +27,7 @@ def _write_auth(
     email: str | None = None,
     include_id_token: bool = True,
     include_access_token: bool = True,
+    last_refresh: str = "2026-04-17T00:00:00Z",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     token_payload: dict[str, object] = {"sub": account_id}
@@ -33,6 +35,7 @@ def _write_auth(
         token_payload["email"] = email
     access_token_payload: dict[str, object] = {
         "sub": account_id,
+        "exp": 1893456000,
         "https://api.openai.com/profile": {"email": email} if email is not None else {},
     }
     path.write_text(
@@ -46,7 +49,7 @@ def _write_auth(
                     "id_token": _jwt(token_payload) if include_id_token else None,
                     "account_id": account_id,
                 },
-                "last_refresh": "2026-04-17T00:00:00Z",
+                "last_refresh": last_refresh,
             }
         ),
         encoding="utf-8",
@@ -227,6 +230,102 @@ def test_codex_account_service_login_preserves_old_account_and_imports_new_one(t
     assert not any((tmp_path / "accounts").glob(".login-backup-*"))
 
 
+def test_codex_account_service_login_same_account_updates_existing_entry(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    _write_auth(auth_path, account_id="acct-same", email="same@example.com", last_refresh="2026-04-17T00:00:00Z")
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    codex_bin = tmp_path / "bin" / "codex"
+    codex_bin.parent.mkdir(parents=True, exist_ok=True)
+    codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    callback_result: list[bool] = []
+    callback_event = threading.Event()
+
+    class FakeProcess:
+        def wait(self) -> int:
+            _write_auth(
+                auth_path,
+                account_id="acct-same",
+                email="same@example.com",
+                last_refresh="2026-04-18T00:00:00Z",
+            )
+            return 0
+
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=manifest_path,
+        configured_codex_bin=str(codex_bin),
+        launch_login=lambda _command: FakeProcess(),
+        now=lambda: 321,
+    )
+
+    original_account = service.list_accounts()[0]
+    started = service.start_device_login(
+        "Same login",
+        on_complete=lambda success: (callback_result.append(success), callback_event.set()),
+    )
+
+    assert started is True
+    assert callback_event.wait(1)
+    assert callback_result == [True]
+
+    accounts = service.list_accounts()
+    assert len(accounts) == 1
+    assert accounts[0].account_id == original_account.account_id
+    assert accounts[0].label == "same@example.com"
+    assert accounts[0].is_active is True
+
+
+def test_codex_account_service_login_waits_for_auth_after_launcher_exit(tmp_path: Path, monkeypatch) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    codex_bin = tmp_path / "bin" / "codex"
+    codex_bin.parent.mkdir(parents=True, exist_ok=True)
+    codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    callback_result: list[bool] = []
+    callback_event = threading.Event()
+
+    class FakePollingProcess:
+        def __init__(self) -> None:
+            self._return_code: int | None = None
+            threading.Thread(target=self._finish, daemon=True).start()
+
+        def _finish(self) -> None:
+            time.sleep(0.02)
+            self._return_code = 0
+            time.sleep(0.02)
+            _write_auth(auth_path, account_id="acct-browser", email="browser@example.com")
+
+        def poll(self) -> int | None:
+            return self._return_code
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_POLL_INTERVAL_SECONDS", 0.01)
+
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=manifest_path,
+        configured_codex_bin=str(codex_bin),
+        launch_login=lambda _command: FakePollingProcess(),
+        now=lambda: 325,
+    )
+
+    started = service.start_device_login(
+        "Browser login",
+        on_complete=lambda success: (callback_result.append(success), callback_event.set()),
+    )
+
+    assert started is True
+    assert callback_event.wait(1)
+    assert callback_result == [True]
+    status = service.get_status()
+    assert status.current_account_label == "browser@example.com"
+    assert len(status.accounts) == 1
+
+
 def test_codex_account_service_login_failure_restores_previous_auth(tmp_path: Path) -> None:
     auth_path = tmp_path / ".codex" / "auth.json"
     _write_auth(auth_path, account_id="acct-old", email="old@example.com")
@@ -262,6 +361,115 @@ def test_codex_account_service_login_failure_restores_previous_auth(tmp_path: Pa
     assert not any((tmp_path / "accounts").glob(".login-backup-*"))
 
 
+def test_codex_account_service_login_timeout_restores_previous_auth(tmp_path: Path, monkeypatch) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    _write_auth(auth_path, account_id="acct-old", email="old@example.com")
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    callback_result: list[bool] = []
+    callback_event = threading.Event()
+
+    class FakePollingProcess:
+        def __init__(self) -> None:
+            self._return_code = 0
+
+        def poll(self) -> int | None:
+            return self._return_code
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_POLL_INTERVAL_SECONDS", 0.01)
+
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=manifest_path,
+        launch_login=lambda _command: FakePollingProcess(),
+        now=lambda: 335,
+    )
+
+    started = service.start_device_login(
+        "Timeout login",
+        on_complete=lambda success: (callback_result.append(success), callback_event.set()),
+    )
+
+    assert started is True
+    assert callback_event.wait(1)
+    assert callback_result == [False]
+    assert json.loads(auth_path.read_text(encoding="utf-8"))["tokens"]["account_id"] == "acct-old"
+    assert service.get_status().current_account_label == "old@example.com"
+
+
+def test_codex_account_service_login_succeeds_when_auth_arrives_after_nonzero_exit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    callback_result: list[bool] = []
+    callback_event = threading.Event()
+
+    class FakePollingProcess:
+        def __init__(self) -> None:
+            self._return_code: int | None = None
+            threading.Thread(target=self._finish, daemon=True).start()
+
+        def _finish(self) -> None:
+            time.sleep(0.01)
+            self._return_code = 1
+            time.sleep(0.02)
+            _write_auth(auth_path, account_id="acct-late", email="late@example.com")
+
+        def poll(self) -> int | None:
+            return self._return_code
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_POLL_INTERVAL_SECONDS", 0.01)
+
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=manifest_path,
+        launch_login=lambda _command: FakePollingProcess(),
+        now=lambda: 336,
+    )
+
+    started = service.start_device_login(
+        "Late login",
+        on_complete=lambda success: (callback_result.append(success), callback_event.set()),
+    )
+
+    assert started is True
+    assert callback_event.wait(1)
+    assert callback_result == [True]
+    assert service.get_status().current_account_label == "late@example.com"
+
+
+def test_codex_account_service_reports_local_login_in_progress_before_worker_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+    )
+
+    class DeferredThread:
+        def __init__(self, *, target, args, daemon):  # type: ignore[no-untyped-def]
+            assert daemon is True
+            self.target = target
+            self.args = args
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts.threading.Thread", DeferredThread)
+
+    assert service.start_device_login("Work") is True
+    assert service.get_status().device_login_in_progress is True
+    assert service.start_device_login("Other") is False
+
+
 def test_codex_account_service_import_current_auth_adds_new_managed_account(tmp_path: Path) -> None:
     auth_path = tmp_path / ".codex" / "auth.json"
     _write_auth(auth_path, account_id="acct-import", email="import@example.com")
@@ -277,6 +485,193 @@ def test_codex_account_service_import_current_auth_adds_new_managed_account(tmp_
     assert imported.label == "import@example.com"
     accounts = service.list_accounts()
     assert any(account.label == "import@example.com" for account in accounts)
+
+
+def test_codex_account_service_load_deduplicates_same_identity_accounts(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    accounts_dir = tmp_path / "accounts"
+    _write_auth(auth_path, account_id="acct-dup", email="dup@example.com", last_refresh="2026-04-19T00:00:00Z")
+    snapshot_a = accounts_dir / "acct-a.json"
+    snapshot_b = accounts_dir / "acct-b.json"
+    _write_auth(snapshot_a, account_id="acct-dup", email="dup@example.com", last_refresh="2026-04-17T00:00:00Z")
+    _write_auth(snapshot_b, account_id="acct-dup", email="dup@example.com", last_refresh="2026-04-18T00:00:00Z")
+
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=accounts_dir,
+        manifest_path=manifest_path,
+        now=lambda: 340,
+    )
+    payload_a = service._read_payload_from_path(snapshot_a)  # type: ignore[attr-defined]
+    payload_b = service._read_payload_from_path(snapshot_b)  # type: ignore[attr-defined]
+    assert payload_a is not None
+    assert payload_b is not None
+
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account_id": "acct-a",
+                        "label": "dup@example.com",
+                        "created_at": 100,
+                        "updated_at": 100,
+                        "auth_fingerprint": service._fingerprint_payload(payload_a),  # type: ignore[attr-defined]
+                        "identity_key": "account_id:acct-dup",
+                        "is_default": True,
+                    },
+                    {
+                        "account_id": "acct-b",
+                        "label": "dup@example.com",
+                        "created_at": 101,
+                        "updated_at": 101,
+                        "auth_fingerprint": service._fingerprint_payload(payload_b),  # type: ignore[attr-defined]
+                        "identity_key": "account_id:acct-dup",
+                        "is_default": False,
+                    },
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    accounts = service.list_accounts()
+
+    assert len(accounts) == 1
+    assert accounts[0].account_id == "acct-a"
+    assert accounts[0].is_active is True
+    assert snapshot_a.exists()
+    assert not snapshot_b.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert len(manifest["accounts"]) == 1
+
+
+def test_codex_account_service_sync_credentials_updates_openclaw_and_hermes(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    _write_auth(auth_path, account_id="acct-sync", email="sync@example.com")
+    openclaw_main = tmp_path / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+    openclaw_codex = tmp_path / ".openclaw" / "agents" / "codex" / "agent" / "auth-profiles.json"
+    openclaw_main_state = openclaw_main.with_name("auth-state.json")
+    openclaw_keep_profile = "other:default"
+    hermes_auth = tmp_path / ".hermes" / "auth.json"
+    openclaw_main.parent.mkdir(parents=True, exist_ok=True)
+    openclaw_main.write_text(
+        json.dumps({"profiles": {openclaw_keep_profile: {"provider": "other", "type": "token", "token": "keep"}}}),
+        encoding="utf-8",
+    )
+    openclaw_main_state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "lastGood": {"other": openclaw_keep_profile},
+                "usageStats": {
+                    _OPENCLAW_PROFILE_ID: {
+                        "errorCount": 5,
+                        "cooldownUntil": 9999999999999,
+                    },
+                    openclaw_keep_profile: {
+                        "errorCount": 1,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    hermes_auth.parent.mkdir(parents=True, exist_ok=True)
+    hermes_auth.write_text(json.dumps({"providers": {"nous": {"token": "keep"}}}), encoding="utf-8")
+
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+        openclaw_auth_profile_paths=(openclaw_main, openclaw_codex),
+        hermes_auth_path=hermes_auth,
+    )
+
+    result = service.sync_credentials()
+
+    assert result.account_email == "sync@example.com"
+    for path in (openclaw_main, openclaw_codex):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["defaults"]["openai-codex"] == "openai-codex:default"
+        assert payload["profiles"]["openai-codex:default"]["provider"] == "openai-codex"
+        assert payload["profiles"]["openai-codex:default"]["accountId"] == "acct-sync"
+        assert payload["profiles"]["openai-codex:default"]["managedBy"] == "codex-cli"
+        assert payload["profiles"]["openai-codex:default"]["refresh"] == "refresh-acct-sync"
+        assert payload["version"] == 1
+        state_payload = json.loads(path.with_name("auth-state.json").read_text(encoding="utf-8"))
+        assert state_payload["lastGood"]["openai-codex"] == _OPENCLAW_PROFILE_ID
+        assert _OPENCLAW_PROFILE_ID not in state_payload.get("usageStats", {})
+    main_state_payload = json.loads(openclaw_main_state.read_text(encoding="utf-8"))
+    assert main_state_payload["lastGood"]["other"] == openclaw_keep_profile
+    assert main_state_payload["usageStats"][openclaw_keep_profile]["errorCount"] == 1
+    hermes_payload = json.loads(hermes_auth.read_text(encoding="utf-8"))
+    assert hermes_payload["active_provider"] == "openai-codex"
+    assert hermes_payload["providers"]["nous"]["token"] == "keep"
+    assert hermes_payload["providers"]["openai-codex"]["tokens"]["account_id"] == "acct-sync"
+    assert hermes_payload["providers"]["openai-codex"]["auth_mode"] == "chatgpt"
+
+
+def test_codex_account_service_sync_credentials_can_select_account_by_email(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    openclaw_target = tmp_path / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+    hermes_auth = tmp_path / ".hermes" / "auth.json"
+    _write_auth(auth_path, account_id="acct-current", email="current@example.com")
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=manifest_path,
+        openclaw_auth_profile_paths=(openclaw_target,),
+        hermes_auth_path=hermes_auth,
+    )
+
+    current_account = service.list_accounts()[0]
+    _write_auth(auth_path, account_id="acct-other", email="other@example.com")
+    imported = service.import_current_auth("Other")
+    service.switch_account(current_account.account_id)
+
+    result = service.sync_credentials("other@example.com")
+
+    assert result.account_email == "other@example.com"
+    payload = json.loads(openclaw_target.read_text(encoding="utf-8"))
+    assert payload["profiles"]["openai-codex:default"]["accountId"] == "acct-other"
+    hermes_payload = json.loads(hermes_auth.read_text(encoding="utf-8"))
+    assert hermes_payload["providers"]["openai-codex"]["tokens"]["account_id"] == "acct-other"
+    assert imported.account_id != current_account.account_id
+
+
+def test_codex_account_service_sync_credentials_can_select_account_by_number(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    manifest_path = tmp_path / "accounts" / "accounts.json"
+    openclaw_target = tmp_path / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+    hermes_auth = tmp_path / ".hermes" / "auth.json"
+    _write_auth(auth_path, account_id="acct-current", email="current@example.com")
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=manifest_path,
+        openclaw_auth_profile_paths=(openclaw_target,),
+        hermes_auth_path=hermes_auth,
+    )
+
+    current_account = service.list_accounts()[0]
+    _write_auth(auth_path, account_id="acct-other", email="other@example.com")
+    imported = service.import_current_auth("Other")
+    service.switch_account(current_account.account_id)
+
+    result = service.sync_credentials("2")
+
+    assert result.account_email == "other@example.com"
+    payload = json.loads(openclaw_target.read_text(encoding="utf-8"))
+    assert payload["profiles"]["openai-codex:default"]["accountId"] == "acct-other"
+    hermes_payload = json.loads(hermes_auth.read_text(encoding="utf-8"))
+    assert hermes_payload["providers"]["openai-codex"]["tokens"]["account_id"] == "acct-other"
+    assert imported.account_id != current_account.account_id
 
 
 def test_codex_account_service_get_usage_info_reads_current_auth(tmp_path: Path) -> None:
@@ -485,6 +880,62 @@ def test_codex_account_service_get_usage_info_reads_snapshot_by_email(tmp_path: 
     assert usage.plan_type == "team"
 
 
+def test_codex_account_service_get_usage_info_reads_snapshot_by_number(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    _write_auth(auth_path, account_id="acct-live", email="live@example.com")
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+    )
+    default_account = service.list_accounts()[0]
+
+    snapshot_path = tmp_path / "accounts" / f"{default_account.account_id}.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": None,
+                "tokens": {
+                    "access_token": _jwt(
+                        {
+                            "sub": "acct-default",
+                            "https://api.openai.com/profile": {"email": "default@example.com"},
+                        }
+                    ),
+                    "refresh_token": "***",
+                    "id_token": _jwt(
+                        {
+                            "email": "default@example.com",
+                            "https://api.openai.com/auth": {
+                                "chatgpt_plan_type": "team",
+                                "chatgpt_subscription_active_until": "2099-06-10T00:00:00+00:00",
+                            },
+                        }
+                    ),
+                    "account_id": "acct-default",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service._fetch_backend_usage_payload = lambda _payload: {
+        "email": "default@example.com",
+        "plan_type": "team",
+        "rate_limit": {
+            "primary_window": {"used_percent": 10, "limit_window_seconds": 18000, "reset_at": 1776579494},
+            "secondary_window": {"used_percent": 20, "limit_window_seconds": 604800, "reset_at": 1776997593},
+        },
+    }
+
+    usage = service.get_usage_info("1")
+
+    assert usage.account_id == default_account.account_id
+    assert usage.email == "default@example.com"
+    assert usage.plan_type == "team"
+
+
 def test_codex_account_service_caches_static_usage_fields_between_live_requests(tmp_path: Path) -> None:
     auth_path = tmp_path / ".codex" / "auth.json"
     _write_auth(auth_path, account_id="acct-live", email="live@example.com")
@@ -574,6 +1025,30 @@ def test_codex_account_service_switches_account_by_email(tmp_path: Path) -> None
             service._import_current_auth_locked(stored_accounts, "")  # type: ignore[attr-defined]
 
     switched_status = service.switch_account("old@example.com")
+
+    assert switched_status.current_account_label == "old@example.com"
+    assert switched_status.current_account_id == old_account.account_id
+    assert json.loads(auth_path.read_text(encoding="utf-8"))["tokens"]["account_id"] == "acct-old"
+
+
+def test_codex_account_service_switches_account_by_number(tmp_path: Path) -> None:
+    auth_path = tmp_path / ".codex" / "auth.json"
+    _write_auth(auth_path, account_id="acct-old", email="old@example.com")
+    service = CodexAccountService(
+        auth_path=auth_path,
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+        now=lambda: 320,
+    )
+    old_account = service.list_accounts()[0]
+
+    _write_auth(auth_path, account_id="acct-new", email="new@example.com")
+    with service._locked_accounts_io():  # type: ignore[attr-defined]
+        with service._lock:  # type: ignore[attr-defined]
+            stored_accounts = service._load_accounts_locked()  # type: ignore[attr-defined]
+            service._import_current_auth_locked(stored_accounts, "")  # type: ignore[attr-defined]
+
+    switched_status = service.switch_account("1")
 
     assert switched_status.current_account_label == "old@example.com"
     assert switched_status.current_account_id == old_account.account_id
@@ -739,11 +1214,11 @@ def test_terminal_launch_command_prefers_user_login_shell(monkeypatch, tmp_path:
         }.get(name),
     )
 
-    command = service._terminal_launch_command("codex login --device-auth")  # type: ignore[attr-defined]
+    command = service._terminal_launch_command("codex login")  # type: ignore[attr-defined]
 
     assert command[:2] == ["gnome-terminal", "--"]
     assert command[2:6] == ["/bin/zsh", "-l", "-i", "-c"]
-    assert "codex login --device-auth" in command[6]
+    assert "codex login" in command[6]
 
 
 def test_terminal_launch_command_falls_back_to_sh_without_user_shell(monkeypatch, tmp_path: Path) -> None:
@@ -765,11 +1240,11 @@ def test_terminal_launch_command_falls_back_to_sh_without_user_shell(monkeypatch
         }.get(name),
     )
 
-    command = service._terminal_launch_command("codex login --device-auth")  # type: ignore[attr-defined]
+    command = service._terminal_launch_command("codex login")  # type: ignore[attr-defined]
 
     assert command[:2] == ["xterm", "-e"]
     assert command[2:5] == ["sh", "-lc", command[4]]
-    assert "codex login --device-auth" in command[4]
+    assert "codex login" in command[4]
 
 
 def test_terminal_launch_command_prefers_terminator_without_dbus(monkeypatch, tmp_path: Path) -> None:
@@ -793,11 +1268,11 @@ def test_terminal_launch_command_prefers_terminator_without_dbus(monkeypatch, tm
         }.get(name),
     )
 
-    command = service._terminal_launch_command("codex login --device-auth")  # type: ignore[attr-defined]
+    command = service._terminal_launch_command("codex login")  # type: ignore[attr-defined]
 
     assert command[:3] == ["terminator", "--no-dbus", "-x"]
     assert command[3:7] == ["/bin/zsh", "-l", "-i", "-c"]
-    assert "codex login --device-auth" in command[7]
+    assert "codex login" in command[7]
 
 
 def test_terminal_launch_command_keeps_prompt_after_login_status_write(monkeypatch, tmp_path: Path) -> None:
@@ -907,9 +1382,10 @@ def test_login_shell_command_uses_resolved_codex_executable(monkeypatch, tmp_pat
 
     assert 'export PATH=/home/lzn/.nvm/versions/node/v24.13.0/bin:$PATH;' in command
     assert "/home/lzn/.nvm/versions/node/v24.13.0/bin/codex" in command
-    assert "login --device-auth" in command
+    assert " login" in command
+    assert "--device-auth" not in command
     assert "codex login" not in command.replace(
-        "/home/lzn/.nvm/versions/node/v24.13.0/bin/codex login --device-auth",
+        "/home/lzn/.nvm/versions/node/v24.13.0/bin/codex login",
         "",
     )
 

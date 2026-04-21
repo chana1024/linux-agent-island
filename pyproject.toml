@@ -20,3 +20,4 @@ include = ["linux_agent_island*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
