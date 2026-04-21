@@ -87,6 +87,8 @@ class CodexCredentialSyncResult:
     account_email: str | None
     openclaw_paths: tuple[Path, ...]
     hermes_auth_path: Path
+    openclaw_reload_status: str
+    openclaw_reload_message: str | None = None
 
 
 class CodexAccountService:
@@ -210,18 +212,22 @@ class CodexAccountService:
         account_label = account.label if account is not None else account_email
         self._sync_openclaw_auth(tokens)
         self._sync_hermes_auth(tokens, self._string_claim(auth_payload, "last_refresh"), self._auth_mode(auth_payload))
+        reload_status, reload_message = self._reload_openclaw_runtime()
         logger.info(
-            "synced Codex credentials account_label=%s account_email=%s openclaw_targets=%s hermes_auth_path=%s",
+            "synced Codex credentials account_label=%s account_email=%s openclaw_targets=%s hermes_auth_path=%s openclaw_reload_status=%s",
             account_label or "<none>",
             account_email or "<none>",
             [str(path) for path in self.openclaw_auth_profile_paths],
             self.hermes_auth_path,
+            reload_status,
         )
         return CodexCredentialSyncResult(
             account_label=account_label,
             account_email=account_email,
             openclaw_paths=self.openclaw_auth_profile_paths,
             hermes_auth_path=self.hermes_auth_path,
+            openclaw_reload_status=reload_status,
+            openclaw_reload_message=reload_message,
         )
 
     def switch_account(self, account_selector: str) -> CodexAccountStatus:
@@ -835,6 +841,36 @@ class CodexAccountService:
         auth_store["active_provider"] = "openai-codex"
         auth_store.setdefault("version", 1)
         self._atomic_write_json(self.hermes_auth_path, auth_store)
+
+    def _reload_openclaw_runtime(self) -> tuple[str, str | None]:
+        openclaw_bin = shutil.which("openclaw")
+        if not openclaw_bin:
+            return (
+                "skipped",
+                "openclaw CLI not found in PATH; run `openclaw secrets reload` or restart gateway manually.",
+            )
+        try:
+            result = subprocess.run(
+                [openclaw_bin, "secrets", "reload", "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning("failed to reload OpenClaw runtime after credential sync: %s", exc)
+            return ("failed", f"openclaw secrets reload failed: {exc}")
+
+        detail = result.stdout.strip() or result.stderr.strip()
+        if result.returncode == 0:
+            return ("reloaded", detail or None)
+
+        logger.warning(
+            "OpenClaw runtime reload failed after credential sync return_code=%s detail=%s",
+            result.returncode,
+            detail,
+        )
+        return ("failed", detail or f"openclaw secrets reload exited with code {result.returncode}")
 
     def _read_json_object(self, path: Path) -> dict[str, object]:
         if not path.exists():

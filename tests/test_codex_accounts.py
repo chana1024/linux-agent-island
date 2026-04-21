@@ -550,7 +550,15 @@ def test_codex_account_service_load_deduplicates_same_identity_accounts(tmp_path
     assert len(manifest["accounts"]) == 1
 
 
-def test_codex_account_service_sync_credentials_updates_openclaw_and_hermes(tmp_path: Path) -> None:
+def test_codex_account_service_sync_credentials_updates_openclaw_and_hermes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        CodexAccountService,
+        "_reload_openclaw_runtime",
+        lambda self: ("reloaded", '{"ok": true, "warningCount": 0}'),
+    )
     auth_path = tmp_path / ".codex" / "auth.json"
     _write_auth(auth_path, account_id="acct-sync", email="sync@example.com")
     openclaw_main = tmp_path / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
@@ -614,9 +622,14 @@ def test_codex_account_service_sync_credentials_updates_openclaw_and_hermes(tmp_
     assert hermes_payload["providers"]["nous"]["token"] == "keep"
     assert hermes_payload["providers"]["openai-codex"]["tokens"]["account_id"] == "acct-sync"
     assert hermes_payload["providers"]["openai-codex"]["auth_mode"] == "chatgpt"
+    assert result.openclaw_reload_status == "reloaded"
 
 
-def test_codex_account_service_sync_credentials_can_select_account_by_email(tmp_path: Path) -> None:
+def test_codex_account_service_sync_credentials_can_select_account_by_email(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(CodexAccountService, "_reload_openclaw_runtime", lambda self: ("skipped", None))
     auth_path = tmp_path / ".codex" / "auth.json"
     manifest_path = tmp_path / "accounts" / "accounts.json"
     openclaw_target = tmp_path / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
@@ -645,7 +658,11 @@ def test_codex_account_service_sync_credentials_can_select_account_by_email(tmp_
     assert imported.account_id != current_account.account_id
 
 
-def test_codex_account_service_sync_credentials_can_select_account_by_number(tmp_path: Path) -> None:
+def test_codex_account_service_sync_credentials_can_select_account_by_number(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(CodexAccountService, "_reload_openclaw_runtime", lambda self: ("skipped", None))
     auth_path = tmp_path / ".codex" / "auth.json"
     manifest_path = tmp_path / "accounts" / "accounts.json"
     openclaw_target = tmp_path / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
@@ -672,6 +689,45 @@ def test_codex_account_service_sync_credentials_can_select_account_by_number(tmp
     hermes_payload = json.loads(hermes_auth.read_text(encoding="utf-8"))
     assert hermes_payload["providers"]["openai-codex"]["tokens"]["account_id"] == "acct-other"
     assert imported.account_id != current_account.account_id
+
+
+def test_reload_openclaw_runtime_skips_when_cli_missing(tmp_path: Path, monkeypatch) -> None:
+    service = CodexAccountService(
+        auth_path=tmp_path / ".codex" / "auth.json",
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+    )
+    monkeypatch.setattr("linux_agent_island.codex_accounts.shutil.which", lambda name: None)
+
+    status, message = service._reload_openclaw_runtime()  # type: ignore[attr-defined]
+
+    assert status == "skipped"
+    assert message is not None
+    assert "openclaw secrets reload" in message
+
+
+def test_reload_openclaw_runtime_reports_success(tmp_path: Path, monkeypatch) -> None:
+    service = CodexAccountService(
+        auth_path=tmp_path / ".codex" / "auth.json",
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+    )
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = '{"ok": true, "warningCount": 0}\n'
+        stderr = ""
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts.shutil.which", lambda name: "/usr/bin/openclaw")
+    monkeypatch.setattr(
+        "linux_agent_island.codex_accounts.subprocess.run",
+        lambda *args, **kwargs: FakeCompletedProcess(),
+    )
+
+    status, message = service._reload_openclaw_runtime()  # type: ignore[attr-defined]
+
+    assert status == "reloaded"
+    assert message == '{"ok": true, "warningCount": 0}'
 
 
 def test_codex_account_service_get_usage_info_reads_current_auth(tmp_path: Path) -> None:

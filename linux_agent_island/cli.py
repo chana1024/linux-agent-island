@@ -426,6 +426,9 @@ def codex_sync_auth(args: argparse.Namespace) -> int:
     print(f"openclaw_targets: {len(result.openclaw_paths)}")
     for path in result.openclaw_paths:
         print(f"openclaw: {path}")
+    print(f"openclaw_runtime: {result.openclaw_reload_status}")
+    if result.openclaw_reload_message:
+        print(f"openclaw_runtime_detail: {result.openclaw_reload_message}")
     print(f"hermes: {result.hermes_auth_path}")
     return 0
 

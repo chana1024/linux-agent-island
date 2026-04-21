@@ -565,6 +565,8 @@ def test_codex_sync_auth_prints_target_paths(monkeypatch) -> None:
         account_email = "work@example.com"
         openclaw_paths = ("openclaw-a.json", "openclaw-b.json")
         hermes_auth_path = "hermes-auth.json"
+        openclaw_reload_status = "reloaded"
+        openclaw_reload_message = '{"ok":true,"warningCount":0}'
 
     class FakeService:
         def sync_credentials(self, selector: str | None):
@@ -587,6 +589,8 @@ def test_codex_sync_auth_prints_target_paths(monkeypatch) -> None:
     assert "synced account: work@example.com" in output
     assert "openclaw_targets: 2" in output
     assert "openclaw: openclaw-a.json" in output
+    assert "openclaw_runtime: reloaded" in output
+    assert 'openclaw_runtime_detail: {"ok":true,"warningCount":0}' in output
     assert "hermes: hermes-auth.json" in output
 
 
