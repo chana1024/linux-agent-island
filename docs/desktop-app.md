@@ -81,6 +81,7 @@ linux-agent-island codex usage <account>
 linux-agent-island codex sync-auth <account>
 linux-agent-island codex accounts list
 linux-agent-island codex accounts switch <account>
+linux-agent-island codex accounts switch <account> -s
 linux-agent-island codex accounts rename <account-id> <label>
 linux-agent-island codex accounts set-default <account-id>
 linux-agent-island codex accounts delete <account-id>
@@ -106,11 +107,12 @@ Supported settings:
 {
   "top_bar_gap": 8,
   "log_level": "INFO",
-  "start_on_login": true
+  "start_on_login": true,
+  "node_bin_dir": "/home/you/.nvm/versions/node/v24.13.0/bin"
 }
 ```
 
-`top_bar_gap` applies when the island is repositioned. `log_level` applies after service restart. `start_on_login` maps to `systemctl --user enable/disable linux-agent-island.service`.
+`top_bar_gap` applies when the island is repositioned. `log_level` applies after service restart. `start_on_login` maps to `systemctl --user enable/disable linux-agent-island.service`. `node_bin_dir` is an optional PATH prefix used to resolve Node-based CLIs like `codex` and `openclaw` before falling back to the ambient system PATH.
 
 ## Hooks
 

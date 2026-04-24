@@ -77,6 +77,7 @@ linux-agent-island codex usage <account>             # show usage by account num
 linux-agent-island codex sync-auth <account>         # sync credentials by account number, ID, label, or email
 linux-agent-island codex accounts list               # list managed Codex accounts
 linux-agent-island codex accounts switch <account>   # switch by account number, ID, label, or email
+linux-agent-island codex accounts switch <account> -s # switch, then sync credentials to OpenClaw and Hermes
 linux-agent-island codex accounts rename <id> <name> # rename a managed account
 linux-agent-island codex accounts set-default <id>   # change default account
 linux-agent-island codex accounts delete <id>        # delete a managed account snapshot

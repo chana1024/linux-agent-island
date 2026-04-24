@@ -20,6 +20,7 @@ class FrontendSettings:
     log_level: str = DEFAULT_LOG_LEVEL
     start_on_login: bool = DEFAULT_START_ON_LOGIN
     codex_bin_path: str = ""
+    node_bin_dir: str = ""
 
 
 def load_frontend_settings(settings_path: Path) -> FrontendSettings:
@@ -44,11 +45,14 @@ def load_frontend_settings(settings_path: Path) -> FrontendSettings:
         start_on_login = DEFAULT_START_ON_LOGIN
     raw_codex_bin_path = payload.get("codex_bin_path", "")
     codex_bin_path = raw_codex_bin_path.strip() if isinstance(raw_codex_bin_path, str) else ""
+    raw_node_bin_dir = payload.get("node_bin_dir", "")
+    node_bin_dir = raw_node_bin_dir.strip() if isinstance(raw_node_bin_dir, str) else ""
     return FrontendSettings(
         top_bar_gap=top_bar_gap,
         log_level=log_level,
         start_on_login=start_on_login,
         codex_bin_path=codex_bin_path,
+        node_bin_dir=node_bin_dir,
     )
 
 
@@ -61,6 +65,7 @@ def save_frontend_settings(settings_path: Path, settings: FrontendSettings) -> N
                 "log_level": settings.log_level,
                 "start_on_login": settings.start_on_login,
                 "codex_bin_path": settings.codex_bin_path,
+                "node_bin_dir": settings.node_bin_dir,
             },
             indent=2,
             sort_keys=True,

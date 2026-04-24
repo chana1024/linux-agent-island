@@ -98,6 +98,7 @@ class CodexAccountService:
         accounts_dir: Path,
         manifest_path: Path,
         configured_codex_bin: str = "",
+        node_bin_dir: str = "",
         launch_login: Callable[[str], subprocess.Popen[object]] | None = None,
         now: Callable[[], int] | None = None,
         openclaw_auth_profile_paths: tuple[Path, ...] | None = None,
@@ -107,6 +108,7 @@ class CodexAccountService:
         self.accounts_dir = accounts_dir
         self.manifest_path = manifest_path
         self.configured_codex_bin = configured_codex_bin.strip()
+        self.node_bin_dir = node_bin_dir.strip()
         self.launch_login = launch_login or self._launch_login_terminal
         self.now = now or (lambda: int(time.time()))
         self.openclaw_auth_profile_paths = openclaw_auth_profile_paths or (
@@ -843,11 +845,11 @@ class CodexAccountService:
         self._atomic_write_json(self.hermes_auth_path, auth_store)
 
     def _reload_openclaw_runtime(self) -> tuple[str, str | None]:
-        openclaw_bin = shutil.which("openclaw")
+        openclaw_bin = self._resolve_node_cli_executable("openclaw")
         if not openclaw_bin:
             return (
                 "skipped",
-                "openclaw CLI not found in PATH; run `openclaw secrets reload` or restart gateway manually.",
+                "openclaw CLI not found in configured node_bin_dir or PATH; run `openclaw secrets reload` or restart gateway manually.",
             )
         try:
             result = subprocess.run(
@@ -1386,13 +1388,20 @@ class CodexAccountService:
                 return str(candidate)
             raise RuntimeError(f"configured Codex executable is not executable: {candidate}")
 
-        path_candidate = shutil.which("codex")
+        path_candidate = self._resolve_node_cli_executable("codex")
         if path_candidate:
             return path_candidate
 
         raise RuntimeError(
-            "Codex CLI not found in system PATH. Configure codex_bin_path in island settings or make `codex` available in PATH."
+            "Codex CLI not found in configured node_bin_dir or system PATH. Configure codex_bin_path/node_bin_dir in island settings or make `codex` available in PATH."
         )
+
+    def _resolve_node_cli_executable(self, executable_name: str) -> str | None:
+        if self.node_bin_dir:
+            candidate = Path(self.node_bin_dir).expanduser() / executable_name
+            if self._is_executable_file(candidate):
+                return str(candidate)
+        return shutil.which(executable_name)
 
     def _find_codex_in_nvm_tree(self) -> Path | None:
         nvm_dir = Path(os.environ.get("NVM_DIR", Path.home() / ".nvm")).expanduser()

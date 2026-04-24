@@ -220,6 +220,7 @@ def _build_codex_account_service() -> CodexAccountService:
         accounts_dir=config.codex_accounts_dir,
         manifest_path=config.codex_accounts_manifest_path,
         configured_codex_bin=settings.codex_bin_path,
+        node_bin_dir=settings.node_bin_dir,
     )
 
 
@@ -421,16 +422,22 @@ def codex_sync_auth(args: argparse.Namespace) -> int:
     except Exception as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
-    account_text = result.account_email or result.account_label or "current account"
-    print(f"synced account: {account_text}")
-    print(f"openclaw_targets: {len(result.openclaw_paths)}")
-    for path in result.openclaw_paths:
-        print(f"openclaw: {path}")
-    print(f"openclaw_runtime: {result.openclaw_reload_status}")
-    if result.openclaw_reload_message:
-        print(f"openclaw_runtime_detail: {result.openclaw_reload_message}")
-    print(f"hermes: {result.hermes_auth_path}")
+    _print_codex_sync_result(result)
     return 0
+
+
+def _print_codex_sync_result(result: object) -> None:
+    account_text = getattr(result, "account_email", None) or getattr(result, "account_label", None) or "current account"
+    print(f"synced account: {account_text}")
+    openclaw_paths = tuple(getattr(result, "openclaw_paths", ()))
+    print(f"openclaw_targets: {len(openclaw_paths)}")
+    for path in openclaw_paths:
+        print(f"openclaw: {path}")
+    print(f"openclaw_runtime: {getattr(result, 'openclaw_reload_status', '-')}")
+    reload_message = getattr(result, "openclaw_reload_message", None)
+    if reload_message:
+        print(f"openclaw_runtime_detail: {reload_message}")
+    print(f"hermes: {getattr(result, 'hermes_auth_path', '-')}")
 
 
 def codex_accounts_list(_args: argparse.Namespace) -> int:
@@ -460,6 +467,16 @@ def codex_accounts_switch(args: argparse.Namespace) -> int:
     print(f"current_account_no: {_account_number_for_id(getattr(status, 'accounts', []), status.current_account_id)}")
     print(f"current_account_id: {status.current_account_id or '-'}")
     print(f"current_account_label: {status.current_account_label or '-'}")
+    if getattr(args, "sync_auth", False):
+        try:
+            result = service.sync_credentials(selector)
+        except ValueError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 2
+        except Exception as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 1
+        _print_codex_sync_result(result)
     return 0
 
 
@@ -523,6 +540,12 @@ def _configure_codex_accounts_subcommands(
 
     accounts_switch_parser = accounts_subparsers.add_parser("switch", help="Switch the active Codex account")
     accounts_switch_parser.add_argument("account", help="Account number, ID, label, or email to switch to")
+    accounts_switch_parser.add_argument(
+        "-s",
+        "--sync-auth",
+        action="store_true",
+        help="Sync the switched Codex credentials to OpenClaw and Hermes after switching",
+    )
     accounts_switch_parser.set_defaults(func=codex_accounts_switch)
 
     accounts_rename_parser = accounts_subparsers.add_parser("rename", help="Rename a managed Codex account")

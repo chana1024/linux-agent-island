@@ -64,17 +64,24 @@ class FrontendSettingsMixin:
         autostart = Gtk.Switch()
         autostart.set_active(self.settings.start_on_login)
 
+        node_bin_dir = Gtk.Entry()
+        node_bin_dir.set_text(self.settings.node_bin_dir)
+        node_bin_dir.set_hexpand(True)
+        node_bin_dir.set_placeholder_text("/home/you/.nvm/versions/node/vX.Y.Z/bin")
+
         root.append(self._settings_row("Top bar gap", gap))
         root.append(self._settings_row("Log level", log_level))
         root.append(self._settings_row("Start on login", autostart))
+        root.append(self._settings_row("Node bin dir", node_bin_dir))
 
-        note = Gtk.Label(label="Log level changes apply after restart.")
+        note = Gtk.Label(label="Log level changes apply after restart. Node bin dir is used to resolve Node-based CLIs like codex/openclaw before falling back to PATH.")
         note.set_xalign(0)
         note.add_css_class("meta")
+        note.set_wrap(True)
         root.append(note)
 
         save = Gtk.Button(label="Save")
-        save.connect("clicked", lambda *_args: self._save_settings(gap, log_level, autostart))
+        save.connect("clicked", lambda *_args: self._save_settings(gap, log_level, autostart, node_bin_dir))
         root.append(save)
 
         root.append(self._codex_accounts_section())
@@ -169,12 +176,13 @@ class FrontendSettingsMixin:
         root.append(actions)
         return root
 
-    def _save_settings(self, gap: Gtk.SpinButton, log_level: Gtk.ComboBoxText, autostart: Gtk.Switch) -> None:
+    def _save_settings(self, gap: Gtk.SpinButton, log_level: Gtk.ComboBoxText, autostart: Gtk.Switch, node_bin_dir: Gtk.Entry) -> None:
         active_text = log_level.get_active_text()
         updated = FrontendSettings(
             top_bar_gap=int(gap.get_value()),
             log_level=str(active_text) if active_text is not None else self.settings.log_level,
             start_on_login=autostart.get_active(),
+            node_bin_dir=node_bin_dir.get_text().strip(),
         )
         save_frontend_settings(self.config.frontend_settings_path, updated)
         self.settings = updated

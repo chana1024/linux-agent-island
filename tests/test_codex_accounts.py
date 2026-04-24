@@ -424,10 +424,16 @@ def test_codex_account_service_login_succeeds_when_auth_arrives_after_nonzero_ex
     monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_TIMEOUT_SECONDS", 0.3)
     monkeypatch.setattr("linux_agent_island.codex_accounts._DEVICE_LOGIN_POLL_INTERVAL_SECONDS", 0.01)
 
+    fake_codex_bin = tmp_path / "bin" / "codex"
+    fake_codex_bin.parent.mkdir(parents=True, exist_ok=True)
+    fake_codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_codex_bin.chmod(0o755)
+
     service = CodexAccountService(
         auth_path=auth_path,
         accounts_dir=tmp_path / "accounts",
         manifest_path=manifest_path,
+        configured_codex_bin=str(fake_codex_bin),
         launch_login=lambda _command: FakePollingProcess(),
         now=lambda: 336,
     )
@@ -1402,6 +1408,25 @@ def test_resolve_codex_executable_falls_back_to_system_path(monkeypatch, tmp_pat
     assert service._resolve_codex_executable() == str(codex_bin)
 
 
+def test_resolve_codex_executable_uses_node_bin_dir_before_system_path(monkeypatch, tmp_path: Path) -> None:
+    node_bin_dir = tmp_path / "nvm" / "bin"
+    codex_bin = node_bin_dir / "codex"
+    codex_bin.parent.mkdir(parents=True, exist_ok=True)
+    codex_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+
+    service = CodexAccountService(
+        auth_path=tmp_path / ".codex" / "auth.json",
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+        node_bin_dir=str(node_bin_dir),
+    )
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts.shutil.which", lambda name: "/usr/bin/codex" if name == "codex" else None)
+
+    assert service._resolve_codex_executable() == str(codex_bin)
+
+
 def test_resolve_codex_executable_raises_when_configured_path_invalid(monkeypatch, tmp_path: Path) -> None:
     service = CodexAccountService(
         auth_path=tmp_path / ".codex" / "auth.json",
@@ -1444,6 +1469,42 @@ def test_login_shell_command_uses_resolved_codex_executable(monkeypatch, tmp_pat
         "/home/lzn/.nvm/versions/node/v24.13.0/bin/codex login",
         "",
     )
+
+
+def test_reload_openclaw_runtime_uses_node_bin_dir_before_system_path(tmp_path: Path, monkeypatch) -> None:
+    node_bin_dir = tmp_path / "nvm" / "bin"
+    openclaw_bin = node_bin_dir / "openclaw"
+    openclaw_bin.parent.mkdir(parents=True, exist_ok=True)
+    openclaw_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    openclaw_bin.chmod(0o755)
+
+    service = CodexAccountService(
+        auth_path=tmp_path / ".codex" / "auth.json",
+        accounts_dir=tmp_path / "accounts",
+        manifest_path=tmp_path / "accounts" / "accounts.json",
+        node_bin_dir=str(node_bin_dir),
+    )
+
+    class Result:
+        returncode = 0
+        stdout = '{"ok":true}\n'
+        stderr = ""
+
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts.shutil.which", lambda name: "/usr/bin/openclaw" if name == "openclaw" else None)
+
+    def fake_run(argv, **kwargs):
+        calls["argv"] = argv
+        return Result()
+
+    monkeypatch.setattr("linux_agent_island.codex_accounts.subprocess.run", fake_run)
+
+    status, message = service._reload_openclaw_runtime()  # type: ignore[attr-defined]
+
+    assert status == "reloaded"
+    assert message == '{"ok":true}'
+    assert calls["argv"][0] == str(openclaw_bin)
 
 
 def test_launch_login_terminal_passes_gui_env(monkeypatch, tmp_path: Path) -> None:

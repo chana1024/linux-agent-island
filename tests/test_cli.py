@@ -145,6 +145,22 @@ def test_main_dispatches_codex_sync_auth_account_selector(monkeypatch) -> None:
     assert captured == {"account": "2", "email": ""}
 
 
+def test_main_dispatches_codex_accounts_switch_sync_auth_flag(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_codex_accounts_switch(args: argparse.Namespace) -> int:
+        captured["account"] = args.account
+        captured["sync_auth"] = args.sync_auth
+        return 33
+
+    monkeypatch.setattr(cli, "codex_accounts_switch", fake_codex_accounts_switch)
+
+    result = cli.main(["codex", "accounts", "switch", "2", "-s"])
+
+    assert result == 33
+    assert captured == {"account": "2", "sync_auth": True}
+
+
 def test_main_dispatches_toggle_subcommand(monkeypatch) -> None:
     monkeypatch.setattr(cli, "toggle_app", lambda _args: 41)
 
@@ -511,6 +527,50 @@ def test_codex_accounts_switch_uses_selector(monkeypatch) -> None:
     assert result == 0
     assert captured == {"selector": "second@example.com"}
     assert "current_account_label: second@example.com" in stdout.getvalue()
+
+
+def test_codex_accounts_switch_syncs_auth_when_requested(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResult:
+        account_label = "second@example.com"
+        account_email = "second@example.com"
+        openclaw_paths = ("openclaw-auth.json",)
+        hermes_auth_path = "hermes-auth.json"
+        openclaw_reload_status = "reloaded"
+        openclaw_reload_message = None
+
+    class FakeService:
+        def switch_account(self, selector: str):
+            captured["switch_selector"] = selector
+            return SimpleNamespace(
+                current_account_id="acct-2",
+                current_account_label="second@example.com",
+                accounts=[SimpleNamespace(account_id="acct-2")],
+            )
+
+        def sync_credentials(self, selector: str | None):
+            captured["sync_selector"] = selector
+            return FakeResult()
+
+    monkeypatch.setattr(cli, "AppConfig", SimpleNamespace(default=lambda: SimpleNamespace(
+        codex_auth_path="auth",
+        codex_accounts_dir="accounts",
+        codex_accounts_manifest_path="manifest",
+    )))
+    monkeypatch.setattr(cli, "CodexAccountService", lambda **_kwargs: FakeService())
+    stdout = io.StringIO()
+
+    with contextlib.redirect_stdout(stdout):
+        result = cli.codex_accounts_switch(argparse.Namespace(account="2", sync_auth=True))
+
+    assert result == 0
+    assert captured == {"switch_selector": "2", "sync_selector": "2"}
+    output = stdout.getvalue()
+    assert "current_account_no: 1" in output
+    assert "synced account: second@example.com" in output
+    assert "openclaw: openclaw-auth.json" in output
+    assert "hermes: hermes-auth.json" in output
 
 
 def test_codex_accounts_rename_reports_validation_errors(monkeypatch) -> None:
