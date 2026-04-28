@@ -12,6 +12,7 @@ from .utils import (
     current_timestamp,
     extract_prompt_title,
     fallback_session_title,
+    get_process_metadata,
 )
 
 
@@ -318,6 +319,11 @@ class ClaudeProvider(BaseProvider):
         pid: int | None = None,
         tty: str | None = None,
     ) -> dict[str, Any]:
+        if pid is None or tty is None:
+            auto_pid, auto_tty = get_process_metadata()
+            pid = pid if pid is not None else auto_pid
+            tty = tty if tty is not None else auto_tty
+
         now_ts = current_timestamp()
         status = payload.get("status")
         if not status:
