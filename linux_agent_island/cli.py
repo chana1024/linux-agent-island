@@ -318,6 +318,14 @@ def _usage_account_label(usage: object) -> str:
     return "Current account"
 
 
+def _account_display_label(account: object) -> str:
+    for field in ("label", "email", "account_id"):
+        value = getattr(account, field, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "-"
+
+
 def _account_number_for_id(accounts: list[object], account_id: object) -> str:
     if not isinstance(account_id, str) or not account_id.strip():
         return "-"
@@ -348,10 +356,38 @@ def _print_usage_block(usage: object, *, header: str | None = None, account_numb
     print(f"Week resets   : {_human_timestamp(weekly_reset)} (in {_human_duration_until(weekly_reset)})")
 
 
+def _usage_error_message(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return exc.__class__.__name__
 
-def _print_usage_table(accounts_with_usage: list[tuple[object, object]]) -> None:
+
+def _fetch_usage_for_account(service: CodexAccountService, account: object) -> tuple[object, object | None, str | None]:
+    try:
+        return account, service.get_usage_info(getattr(account, "account_id", None)), None
+    except Exception as exc:
+        return account, None, _usage_error_message(exc)
+
+
+def _print_usage_table(accounts_with_usage: list[tuple[object, object | None, str | None]]) -> None:
     rows: list[list[str]] = []
-    for index, (account, usage) in enumerate(accounts_with_usage, start=1):
+    for index, (account, usage, error) in enumerate(accounts_with_usage, start=1):
+        if usage is None:
+            rows.append(
+                [
+                    str(index),
+                    _account_display_label(account),
+                    "yes" if bool(getattr(account, "is_active", False)) else "",
+                    "Error",
+                    error or "failed",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                ]
+            )
+            continue
         expires = _human_datetime(getattr(usage, "subscription_active_until", None))
         if expires != "-":
             expires = expires[:16]
@@ -393,15 +429,20 @@ def codex_usage(args: argparse.Namespace) -> int:
                 usage = service.get_usage_info(None)
                 _print_usage_block(usage)
                 return 0
-            if len(accounts) == 1:
-                usages = [service.get_usage_info(accounts[0].account_id)]
-            else:
-                max_workers = min(8, len(accounts))
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    usages = list(executor.map(lambda account: service.get_usage_info(account.account_id), accounts))
-            accounts_with_usage = list(zip(accounts, usages))
+            max_workers = min(8, len(accounts))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                accounts_with_usage = list(
+                    executor.map(lambda account: _fetch_usage_for_account(service, account), accounts)
+                )
             _print_usage_table(accounts_with_usage)
-            return 0
+            failed_accounts = [
+                (account, error)
+                for account, usage, error in accounts_with_usage
+                if usage is None and error is not None
+            ]
+            for account, error in failed_accounts:
+                sys.stderr.write(f"warning: failed to fetch usage for {_account_display_label(account)}: {error}\n")
+            return 1 if len(failed_accounts) == len(accounts_with_usage) else 0
         usage = service.get_usage_info(account_selector or None)
         accounts = service.list_accounts()
     except ValueError as exc:

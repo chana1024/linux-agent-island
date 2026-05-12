@@ -398,6 +398,58 @@ def test_codex_usage_all_falls_back_to_current_account_when_no_managed_accounts(
     assert "5h left       : 80.0%" in output
 
 
+def test_codex_usage_all_keeps_printing_when_one_account_fails(monkeypatch) -> None:
+    class FakeUsage:
+        label = "second@example.com"
+        plan_type = "team"
+        subscription_active_until = "2026-06-01T00:00:00+00:00"
+        five_hour_used_percent = 10.0
+        five_hour_resets_at = 1776579494
+        weekly_used_percent = 20.0
+        weekly_resets_at = 1776997593
+
+    class FakeAccount:
+        def __init__(self, account_id: str, label: str, *, is_active: bool = False) -> None:
+            self.account_id = account_id
+            self.label = label
+            self.is_active = is_active
+
+    class FakeService:
+        def list_accounts(self):
+            return [
+                FakeAccount("acct-1", "first@example.com"),
+                FakeAccount("acct-2", "second@example.com", is_active=True),
+            ]
+
+        def get_usage_info(self, selector: str | None):
+            if selector == "acct-1":
+                raise RuntimeError("token expired")
+            assert selector == "acct-2"
+            return FakeUsage()
+
+    monkeypatch.setattr(cli, "AppConfig", SimpleNamespace(default=lambda: SimpleNamespace(
+        codex_auth_path="auth",
+        codex_accounts_dir="accounts",
+        codex_accounts_manifest_path="manifest",
+    )))
+    monkeypatch.setattr(cli, "CodexAccountService", lambda **_kwargs: FakeService())
+    monkeypatch.setattr(cli.time, "time", lambda: 1776575894)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        result = cli.codex_usage(argparse.Namespace(all_accounts=True))
+
+    assert result == 0
+    output = stdout.getvalue()
+    assert "first@example.com" in output
+    assert "Error" in output
+    assert "token expired" in output
+    assert "second@example.com" in output
+    assert "90.0%" in output and "80.0%" in output
+    assert "warning: failed to fetch usage for first@example.com: token expired" in stderr.getvalue()
+
+
 def test_codex_usage_fetches_all_accounts_in_parallel(monkeypatch) -> None:
     stdout = io.StringIO()
 
