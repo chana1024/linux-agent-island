@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 build/
 linux_agent_island.egg-info/
+.worktrees/
