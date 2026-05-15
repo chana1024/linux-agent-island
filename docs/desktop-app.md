@@ -95,7 +95,14 @@ linux-agent-island uninstall-hooks
 Keyboard shortcuts:
 
 - Global `Ctrl+Alt+I`: focus the island; if the island is already active, minimize it and restore the previous X11 window.
+- Window-local `?`: show the shortcut help panel; press `?` or `Esc` to close it.
+- Window-local `Up` / `Down`: move the selected session row.
+- Window-local `Enter`: expand the selected session row.
+- Window-local `Shift+Enter`: open the selected session terminal.
 - Window-local `Ctrl+H`: toggle highlight on the selected session row.
+- Window-local `m`: mark or unmark the selected session row for batch close.
+- Window-local `r`: set the selected session row to running; if it is already running, set it to completed.
+- Window-local `x`: close marked session processes, or the selected session when nothing is marked.
 
 Default labels for imported Codex accounts prefer the locally decoded token email in this order: `id_token.email`, `access_token.email`, `access_token["https://api.openai.com/profile"].email`, then fallback names.
 

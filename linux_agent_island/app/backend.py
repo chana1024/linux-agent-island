@@ -20,11 +20,11 @@ from gi.repository import Gio, GLib
 
 from ..codex_accounts import CodexAccountService
 from ..core.config import AppConfig
-from ..core.models import AgentSession
+from ..core.models import AgentSession, SessionPhase
 from ..core.logging import configure_logging
 from ..core.store import SessionStore
 from ..providers import get_all_providers, get_provider
-from ..runtime.agent_events import AgentEvent
+from ..runtime.agent_events import AgentEvent, AgentEventType
 from ..runtime.events import EventSocketServer
 from ..runtime.processes import SessionProcessInspector
 from ..runtime.restore import build_sessions_from_processes, filter_cached_sessions_for_restore
@@ -46,6 +46,16 @@ INTROSPECTION_XML = """
       <arg name="provider" direction="in" type="s"/>
       <arg name="session_id" direction="in" type="s"/>
       <arg name="jumped" direction="out" type="b"/>
+    </method>
+    <method name="TerminateSession">
+      <arg name="provider" direction="in" type="s"/>
+      <arg name="session_id" direction="in" type="s"/>
+      <arg name="terminated" direction="out" type="b"/>
+    </method>
+    <method name="ToggleSessionRunning">
+      <arg name="provider" direction="in" type="s"/>
+      <arg name="session_id" direction="in" type="s"/>
+      <arg name="toggled" direction="out" type="b"/>
     </method>
     <method name="ArchiveSession">
       <arg name="provider" direction="in" type="s"/>
@@ -336,6 +346,42 @@ class BackendService:
                 )
             invocation.return_value(GLib.Variant("(b)", (jumped,)))
             return
+        if method_name == "TerminateSession":
+            provider, session_id = parameters.unpack()
+            logger.info("TerminateSession requested provider=%s session_id=%s", provider, session_id)
+            session = self.store.get(provider, session_id)
+            terminated = False
+            if session is None:
+                logger.warning("TerminateSession session not found provider=%s session_id=%s", provider, session_id)
+            else:
+                terminated = self.process_inspector.terminate_session_process(session)
+            if terminated:
+                logger.info(
+                    "TerminateSession finished provider=%s session_id=%s terminated=%s",
+                    provider,
+                    session_id,
+                    terminated,
+                )
+                GLib.idle_add(self._reconcile_sessions)
+            else:
+                logger.warning(
+                    "TerminateSession finished provider=%s session_id=%s terminated=%s",
+                    provider,
+                    session_id,
+                    terminated,
+                )
+            invocation.return_value(GLib.Variant("(b)", (terminated,)))
+            return
+        if method_name == "ToggleSessionRunning":
+            provider, session_id = parameters.unpack()
+            logger.info("ToggleSessionRunning requested provider=%s session_id=%s", provider, session_id)
+            toggled = self._toggle_session_running(provider, session_id)
+            if toggled:
+                logger.info("ToggleSessionRunning finished provider=%s session_id=%s toggled=%s", provider, session_id, toggled)
+            else:
+                logger.warning("ToggleSessionRunning finished provider=%s session_id=%s toggled=%s", provider, session_id, toggled)
+            invocation.return_value(GLib.Variant("(b)", (toggled,)))
+            return
         if method_name == "ArchiveSession":
             provider, session_id = parameters.unpack()
             self.store.archive(provider, session_id)
@@ -409,6 +455,48 @@ class BackendService:
             "com.lzn.LinuxAgentIsland.Error",
             f"Unknown method: {method_name}",
         )
+
+    def _toggle_session_running(self, provider: str, session_id: str) -> bool:
+        session = self.store.get(provider, session_id)
+        if session is None:
+            logger.warning("ToggleSessionRunning session not found provider=%s session_id=%s", provider, session_id)
+            return False
+
+        now = int(time.time())
+        if session.phase is SessionPhase.RUNNING:
+            event = AgentEvent(
+                type=AgentEventType.SESSION_COMPLETED,
+                provider=provider,
+                session_id=session_id,
+                phase=SessionPhase.COMPLETED,
+                updated_at=now,
+                source="manual_shortcut",
+                origin=session.origin,
+            )
+        else:
+            event = AgentEvent(
+                type=AgentEventType.SESSION_STARTED,
+                provider=provider,
+                session_id=session_id,
+                phase=SessionPhase.RUNNING,
+                updated_at=now,
+                started_at=now,
+                source="manual_shortcut",
+                origin=session.origin,
+            )
+
+        updated = self.store.apply(event)
+        logger.info(
+            "ToggleSessionRunning applied provider=%s session_id=%s previous_phase=%s current_phase=%s",
+            provider,
+            session_id,
+            session.phase.value,
+            updated.phase.value,
+        )
+        self._persist_sessions()
+        self._emit_sessions_changed()
+        self._emit_codex_accounts_changed()
+        return True
 
     def _serialize_sessions(self) -> str:
         sessions = self.store.list_sessions(visible_only=True)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import subprocess
 from dataclasses import replace
 
@@ -546,3 +548,72 @@ class SessionProcessInspector:
                 window.window_id,
             )
         return activated
+
+    def terminate_session_process(self, session: AgentSession) -> bool:
+        logger.info(
+            "terminate_session_process start provider=%s session_id=%s pid=%s",
+            session.provider,
+            session.session_id,
+            session.pid,
+        )
+        if session.pid is None:
+            logger.warning(
+                "terminate_session_process aborted because session has no pid provider=%s session_id=%s",
+                session.provider,
+                session.session_id,
+            )
+            return False
+
+        tree = self.build_process_tree(log_commands=True)
+        process = tree.get(session.pid)
+        if process is None:
+            logger.warning(
+                "terminate_session_process aborted because pid is not live provider=%s session_id=%s pid=%s",
+                session.provider,
+                session.session_id,
+                session.pid,
+            )
+            return False
+
+        provider = process_provider(process)
+        if provider != session.provider:
+            logger.warning(
+                "terminate_session_process aborted because pid provider mismatched provider=%s session_id=%s pid=%s actual_provider=%s",
+                session.provider,
+                session.session_id,
+                session.pid,
+                provider or "<none>",
+            )
+            return False
+
+        live_cwd = self.process_cwd(session.pid, log_commands=True)
+        if session.cwd and live_cwd is not None and live_cwd != session.cwd:
+            logger.warning(
+                "terminate_session_process aborted because pid cwd mismatched provider=%s session_id=%s pid=%s cwd=%s actual_cwd=%s",
+                session.provider,
+                session.session_id,
+                session.pid,
+                session.cwd,
+                live_cwd,
+            )
+            return False
+
+        try:
+            os.kill(session.pid, signal.SIGTERM)
+        except OSError as exc:
+            logger.warning(
+                "terminate_session_process failed provider=%s session_id=%s pid=%s error=%s",
+                session.provider,
+                session.session_id,
+                session.pid,
+                exc,
+            )
+            return False
+
+        logger.info(
+            "terminate_session_process sent SIGTERM provider=%s session_id=%s pid=%s",
+            session.provider,
+            session.session_id,
+            session.pid,
+        )
+        return True

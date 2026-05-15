@@ -11,6 +11,8 @@ from .frontend_client import (
     fetch_session_transcript,
     get_codex_account_status,
     jump_to_session,
+    toggle_session_running,
+    terminate_session,
     delete_codex_account_async,
     rename_codex_account_async,
     set_default_codex_account_async,
@@ -70,6 +72,36 @@ class FrontendInteractionsMixin:
         else:
             self.highlighted_until[self.selected_session_key] = 0
         self._schedule_highlight_cleanup()
+        self._render()
+        return True
+
+    def _toggle_mark_selected(self) -> bool:
+        if not self.expanded:
+            return False
+        if self.selected_session_key is None:
+            return False
+        if self.selected_session_key in self.marked_session_keys:
+            self.marked_session_keys.remove(self.selected_session_key)
+        else:
+            self.marked_session_keys.add(self.selected_session_key)
+        self._render()
+        return True
+
+    def _show_shortcuts_help(self) -> bool:
+        self.shortcuts_help_restore_expanded = self.expanded
+        self.shortcuts_help_visible = True
+        self.expanded = True
+        self.pending_panel_reveal = True
+        self._render()
+        return True
+
+    def _hide_shortcuts_help(self) -> bool:
+        if not self.shortcuts_help_visible:
+            return False
+        restore_expanded = self.shortcuts_help_restore_expanded
+        self.shortcuts_help_visible = False
+        self.expanded = restore_expanded
+        self.pending_panel_reveal = restore_expanded
         self._render()
         return True
 
@@ -172,6 +204,50 @@ class FrontendInteractionsMixin:
             return False
         self._on_session_jump_clicked(session)
         return True
+
+    def _close_selected_session(self) -> bool:
+        if not self.expanded:
+            return False
+        if self.marked_session_keys:
+            return self._close_marked_sessions()
+        if self.selected_session_key is None:
+            return False
+
+        session = self._session_for_key(self.selected_session_key)
+        if session is None:
+            return False
+        return terminate_session(self.proxy, session.provider, session.session_id)
+
+    def _toggle_running_selected(self) -> bool:
+        if not self.expanded:
+            return False
+        if self.selected_session_key is None:
+            return False
+
+        session = self._session_for_key(self.selected_session_key)
+        if session is None:
+            return False
+        return toggle_session_running(self.proxy, session.provider, session.session_id)
+
+    def _close_marked_sessions(self) -> bool:
+        sessions_by_key = {session_key(session): session for session in self.sessions}
+        ordered_keys = [
+            key for key in self.panel_session_keys
+            if key in self.marked_session_keys and key in sessions_by_key
+        ]
+        if not ordered_keys:
+            return False
+
+        terminated_keys: set[SessionKey] = set()
+        for key in ordered_keys:
+            session = sessions_by_key[key]
+            if terminate_session(self.proxy, session.provider, session.session_id):
+                terminated_keys.add(key)
+
+        if terminated_keys:
+            self.marked_session_keys.difference_update(terminated_keys)
+            self._render()
+        return bool(terminated_keys)
 
     def _session_for_key(self, key: SessionKey) -> AgentSession | None:
         for session in self.sessions:
@@ -381,6 +457,7 @@ class FrontendInteractionsMixin:
 
         active_keys = {session_key(session) for session in sessions}
         self.expanded_session_ids.intersection_update(active_keys)
+        self.marked_session_keys.intersection_update(active_keys)
         if self.selected_session_key not in active_keys:
             self.selected_session_key = None
         self.session_transcripts = {

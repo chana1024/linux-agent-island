@@ -72,7 +72,9 @@ class FrontendPanelMixin:
 
         self.box.append(self._header_row())
 
-        if not self.sessions:
+        if self.shortcuts_help_visible:
+            content_area = self._shortcuts_help_view()
+        elif not self.sessions:
             empty = Gtk.Label(label="No visible sessions")
             empty.add_css_class("meta")
             content_area: Gtk.Widget = empty
@@ -128,12 +130,56 @@ class FrontendPanelMixin:
 
         return root
 
+    def _shortcuts_help_view(self) -> Gtk.Widget:
+        shortcuts = [
+            ("Ctrl+Alt+I", "Focus island / restore previous window"),
+            ("?", "Show or hide shortcuts"),
+            ("Esc", "Close shortcuts / collapse one layer / hide island"),
+            ("Up / Down", "Move selected session"),
+            ("Enter", "Expand selected session"),
+            ("Shift+Enter", "Open selected terminal"),
+            ("Ctrl+H", "Toggle selected highlight"),
+            ("m", "Mark selected session for batch close"),
+            ("r", "Set selected session running; running becomes completed"),
+            ("x", "Close marked sessions or selected session"),
+        ]
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.add_css_class("shortcut-help-card")
+
+        title = Gtk.Label(label="Keyboard shortcuts")
+        title.set_xalign(0)
+        title.add_css_class("metadata-title")
+        root.append(title)
+
+        for key_text, description_text in shortcuts:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            row.add_css_class("shortcut-help-row")
+
+            key = Gtk.Label(label=key_text)
+            key.set_width_chars(12)
+            key.set_xalign(0.5)
+            key.add_css_class("shortcut-key")
+            row.append(key)
+
+            description = Gtk.Label(label=description_text)
+            description.set_xalign(0)
+            description.set_hexpand(True)
+            description.set_wrap(True)
+            description.add_css_class("metadata-value")
+            row.append(description)
+            root.append(row)
+
+        return root
+
     def _session_card(self, session) -> Gtk.Widget:
         key = session_key(session)
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         outer.add_css_class("session-card")
         if key in self.highlighted_until and has_done_time_label(session):
             outer.add_css_class("session-card-highlight")
+        if key in self.marked_session_keys:
+            outer.add_css_class("session-card-marked")
         if key == self.selected_session_key:
             outer.add_css_class("session-card-selected")
 

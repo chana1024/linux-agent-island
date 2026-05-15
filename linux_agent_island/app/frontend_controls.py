@@ -40,6 +40,22 @@ def should_toggle_highlight_for_key(keyval: int, state: Gdk.ModifierType) -> boo
     return key_state_has_control(state) and keyval in {Gdk.KEY_h, Gdk.KEY_H}
 
 
+def should_close_selected_for_key(keyval: int, state: Gdk.ModifierType) -> bool:
+    return not key_state_has_control(state) and not key_state_has_shift(state) and keyval in {Gdk.KEY_x, Gdk.KEY_X}
+
+
+def should_mark_selected_for_key(keyval: int, state: Gdk.ModifierType) -> bool:
+    return not key_state_has_control(state) and not key_state_has_shift(state) and keyval in {Gdk.KEY_m, Gdk.KEY_M}
+
+
+def should_show_shortcuts_for_key(keyval: int, state: Gdk.ModifierType) -> bool:
+    return not key_state_has_control(state) and keyval == Gdk.KEY_question
+
+
+def should_toggle_running_for_key(keyval: int, state: Gdk.ModifierType) -> bool:
+    return not key_state_has_control(state) and not key_state_has_shift(state) and keyval in {Gdk.KEY_r, Gdk.KEY_R}
+
+
 def moved_selection_key(
     current_key: tuple[str, str] | None,
     ordered_keys: list[tuple[str, str]],

@@ -9,6 +9,7 @@ pytest.importorskip("gi")
 from linux_agent_island.app import backend as backend_module
 from linux_agent_island.app.backend import BackendService
 from linux_agent_island.core.config import AppConfig
+from linux_agent_island.core.models import AgentSession, SessionOrigin, SessionPhase
 
 
 def test_backend_serializes_codex_account_status(tmp_path: Path, monkeypatch) -> None:
@@ -78,3 +79,68 @@ def test_backend_starts_codex_login_cli_asynchronously(tmp_path: Path, monkeypat
     assert popen_calls[0][1]["XDG_RUNTIME_DIR"] == "/run/user/1000"
     assert len(started_threads) == 1
     assert started_threads[0][1][0].pid == 4321
+
+
+def test_backend_toggle_session_running_marks_completed_session_running(tmp_path: Path, monkeypatch) -> None:
+    service = BackendService(config=AppConfig.default(root=tmp_path))
+    service.store.upsert(
+        AgentSession(
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.COMPLETED,
+            model=None,
+            sandbox=None,
+            approval_mode=None,
+            updated_at=100,
+            completed_at=100,
+            origin=SessionOrigin.RESTORED,
+            is_process_alive=True,
+        )
+    )
+    monkeypatch.setattr(backend_module.time, "time", lambda: 200)
+
+    assert service._toggle_session_running("codex", "thread-1") is True
+
+    session = service.store.get("codex", "thread-1")
+    assert session is not None
+    assert session.phase is SessionPhase.RUNNING
+    assert session.started_at == 200
+    assert session.completed_at is None
+    assert session.updated_at == 200
+
+
+def test_backend_toggle_session_running_marks_running_session_completed(tmp_path: Path, monkeypatch) -> None:
+    service = BackendService(config=AppConfig.default(root=tmp_path))
+    service.store.upsert(
+        AgentSession(
+            provider="codex",
+            session_id="thread-1",
+            cwd="/tmp/demo",
+            title="Demo",
+            phase=SessionPhase.RUNNING,
+            model=None,
+            sandbox=None,
+            approval_mode=None,
+            updated_at=100,
+            started_at=100,
+            origin=SessionOrigin.RESTORED,
+            is_process_alive=True,
+        )
+    )
+    monkeypatch.setattr(backend_module.time, "time", lambda: 250)
+
+    assert service._toggle_session_running("codex", "thread-1") is True
+
+    session = service.store.get("codex", "thread-1")
+    assert session is not None
+    assert session.phase is SessionPhase.COMPLETED
+    assert session.completed_at == 250
+    assert session.updated_at == 250
+
+
+def test_backend_toggle_session_running_rejects_missing_session(tmp_path: Path) -> None:
+    service = BackendService(config=AppConfig.default(root=tmp_path))
+
+    assert service._toggle_session_running("codex", "missing") is False

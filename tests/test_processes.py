@@ -769,6 +769,108 @@ def test_jump_to_session_logs_failed_window_activation(monkeypatch, caplog) -> N
     assert "failed to activate window" in caplog.text
 
 
+def test_terminate_session_process_sends_sigterm_to_matching_provider(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    session = AgentSession(
+        provider="codex",
+        session_id="kill",
+        cwd="/tmp/demo",
+        title="Kill",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        pid=222,
+    )
+    tree = {
+        222: ProcessInfo(pid=222, ppid=111, command="codex", tty="pts/7"),
+    }
+    killed: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(inspector, "process_cwd", lambda _pid, **_kwargs: "/tmp/demo")
+    monkeypatch.setattr("linux_agent_island.runtime.processes.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert inspector.terminate_session_process(session) is True
+    assert killed == [(222, 15)]
+
+
+def test_terminate_session_process_rejects_missing_pid(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    session = AgentSession(
+        provider="codex",
+        session_id="missing",
+        cwd="/tmp/demo",
+        title="Missing",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        pid=None,
+    )
+    killed: list[tuple[int, int]] = []
+
+    monkeypatch.setattr("linux_agent_island.runtime.processes.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert inspector.terminate_session_process(session) is False
+    assert killed == []
+
+
+def test_terminate_session_process_rejects_reused_pid_with_different_provider(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    session = AgentSession(
+        provider="codex",
+        session_id="mismatch",
+        cwd="/tmp/demo",
+        title="Mismatch",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        pid=222,
+    )
+    tree = {
+        222: ProcessInfo(pid=222, ppid=111, command="bash", tty="pts/7"),
+    }
+    killed: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr("linux_agent_island.runtime.processes.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert inspector.terminate_session_process(session) is False
+    assert killed == []
+
+
+def test_terminate_session_process_rejects_reused_pid_with_different_cwd(monkeypatch) -> None:
+    inspector = SessionProcessInspector()
+    session = AgentSession(
+        provider="codex",
+        session_id="mismatch",
+        cwd="/tmp/demo",
+        title="Mismatch",
+        phase=SessionPhase.RUNNING,
+        model=None,
+        sandbox=None,
+        approval_mode=None,
+        updated_at=1,
+        pid=222,
+    )
+    tree = {
+        222: ProcessInfo(pid=222, ppid=111, command="codex", tty="pts/7"),
+    }
+    killed: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(inspector, "build_process_tree", lambda **_kwargs: tree)
+    monkeypatch.setattr(inspector, "process_cwd", lambda _pid, **_kwargs: "/tmp/other")
+    monkeypatch.setattr("linux_agent_island.runtime.processes.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert inspector.terminate_session_process(session) is False
+    assert killed == []
+
+
 def test_list_agent_processes_detects_node_backed_gemini(monkeypatch) -> None:
     inspector = SessionProcessInspector()
     tree = {

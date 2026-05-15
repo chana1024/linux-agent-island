@@ -126,6 +126,84 @@ def jump_to_session(proxy: Gio.DBusProxy | None, provider: str, session_id: str)
     return jumped
 
 
+def terminate_session(proxy: Gio.DBusProxy | None, provider: str, session_id: str) -> bool:
+    if proxy is None:
+        logger.warning("TerminateSession skipped because D-Bus proxy is unavailable")
+        return False
+    logger.info("calling TerminateSession provider=%s session_id=%s", provider, session_id)
+    try:
+        result = proxy.call_sync(
+            "TerminateSession",
+            GLib.Variant("(ss)", (provider, session_id)),
+            Gio.DBusCallFlags.NONE,
+            -1,
+            None,
+        )
+    except GLib.Error as exc:
+        logger.warning(
+            "TerminateSession D-Bus call failed provider=%s session_id=%s error=%s",
+            provider,
+            session_id,
+            exc,
+        )
+        return False
+    terminated = bool(result.unpack()[0])
+    if terminated:
+        logger.info(
+            "TerminateSession returned provider=%s session_id=%s terminated=%s",
+            provider,
+            session_id,
+            terminated,
+        )
+    else:
+        logger.warning(
+            "TerminateSession returned provider=%s session_id=%s terminated=%s",
+            provider,
+            session_id,
+            terminated,
+        )
+    return terminated
+
+
+def toggle_session_running(proxy: Gio.DBusProxy | None, provider: str, session_id: str) -> bool:
+    if proxy is None:
+        logger.warning("ToggleSessionRunning skipped because D-Bus proxy is unavailable")
+        return False
+    logger.info("calling ToggleSessionRunning provider=%s session_id=%s", provider, session_id)
+    try:
+        result = proxy.call_sync(
+            "ToggleSessionRunning",
+            GLib.Variant("(ss)", (provider, session_id)),
+            Gio.DBusCallFlags.NONE,
+            -1,
+            None,
+        )
+    except GLib.Error as exc:
+        logger.warning(
+            "ToggleSessionRunning D-Bus call failed provider=%s session_id=%s error=%s",
+            provider,
+            session_id,
+            exc,
+        )
+        return False
+    toggled = bool(result.unpack()[0])
+    if toggled:
+        logger.info(
+            "ToggleSessionRunning returned provider=%s session_id=%s toggled=%s",
+            provider,
+            session_id,
+            toggled,
+        )
+    else:
+        logger.warning(
+            "ToggleSessionRunning returned provider=%s session_id=%s toggled=%s",
+            provider,
+            session_id,
+            toggled,
+        )
+    return toggled
+
+
 def list_codex_accounts(proxy: Gio.DBusProxy | None) -> list[CodexAccountSummary]:
     if proxy is None:
         return []

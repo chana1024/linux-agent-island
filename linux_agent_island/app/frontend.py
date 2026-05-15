@@ -28,7 +28,11 @@ from .frontend_controls import (
     navigation_delta_for_key,
     should_activate_selected_for_key,
     should_collapse_layer_for_key,
+    should_close_selected_for_key,
+    should_show_shortcuts_for_key,
+    should_mark_selected_for_key,
     should_toggle_highlight_for_key,
+    should_toggle_running_for_key,
 )
 from .frontend_interactions import FrontendInteractionsMixin
 from .frontend_panel import FrontendPanelMixin
@@ -114,6 +118,11 @@ window {
 .session-card-highlight {
   background: rgba(127, 182, 255, 0.12);
   border: 1px solid rgba(127, 182, 255, 0.6);
+}
+
+.session-card-marked {
+  background: rgba(255, 176, 32, 0.1);
+  border: 1px solid rgba(255, 176, 32, 0.55);
 }
 
 .session-card-selected {
@@ -245,6 +254,27 @@ window {
   font-size: 12px;
 }
 
+.shortcut-help-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.shortcut-help-row {
+  min-height: 26px;
+}
+
+.shortcut-key {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+}
+
 .transcript-title {
   color: #8aa2ff;
   font-size: 11px;
@@ -295,11 +325,14 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         self.sessions: list[AgentSession] = []
         self.panel_session_keys: list[SessionKey] = []
         self.selected_session_key: SessionKey | None = None
+        self.marked_session_keys: set[SessionKey] = set()
         self.session_row_widgets: dict[SessionKey, Gtk.Widget] = {}
         self.previous_session_phases: dict[SessionKey, SessionPhase] = {}
         self.highlighted_until: dict[SessionKey, int] = {}
         self.pending_scroll_session: SessionKey | None = None
         self.highlight_timeout_id: int | None = None
+        self.shortcuts_help_visible = False
+        self.shortcuts_help_restore_expanded = False
         self.last_external_window_id: str | None = None
         self.proxy: Gio.DBusProxy | None = None
         self.settings = FrontendSettings()
@@ -418,8 +451,20 @@ class FrontendApp(FrontendInteractionsMixin, FrontendPanelMixin, FrontendSetting
         _keycode: int,
         state: Gdk.ModifierType,
     ) -> bool:
+        if self.shortcuts_help_visible:
+            if should_show_shortcuts_for_key(keyval, state) or should_collapse_layer_for_key(keyval):
+                return self._hide_shortcuts_help()
+            return True
+        if should_show_shortcuts_for_key(keyval, state):
+            return self._show_shortcuts_help()
         if should_toggle_highlight_for_key(keyval, state):
             return self._toggle_highlight_selected()
+        if should_mark_selected_for_key(keyval, state):
+            return self._toggle_mark_selected()
+        if should_toggle_running_for_key(keyval, state):
+            return self._toggle_running_selected()
+        if should_close_selected_for_key(keyval, state):
+            return self._close_selected_session()
         delta = navigation_delta_for_key(keyval)
         if delta is not None:
             return self._move_selected_session(delta)

@@ -30,7 +30,11 @@ from linux_agent_island.frontend import (
     status_dot_glyph,
     should_activate_selected_for_key,
     should_collapse_layer_for_key,
+    should_close_selected_for_key,
+    should_show_shortcuts_for_key,
+    should_mark_selected_for_key,
     should_toggle_highlight_for_key,
+    should_toggle_running_for_key,
     summarize_visible_sessions,
     window_width_for_state,
 )
@@ -533,6 +537,37 @@ def test_control_state_and_manual_highlight_shortcut() -> None:
     assert should_toggle_highlight_for_key(Gdk.KEY_h, Gdk.ModifierType.SHIFT_MASK) is False
 
 
+def test_x_key_closes_selected_session_without_modifiers() -> None:
+    assert should_close_selected_for_key(Gdk.KEY_x, Gdk.ModifierType(0)) is True
+    assert should_close_selected_for_key(Gdk.KEY_X, Gdk.ModifierType(0)) is True
+    assert should_close_selected_for_key(Gdk.KEY_x, Gdk.ModifierType.CONTROL_MASK) is False
+    assert should_close_selected_for_key(Gdk.KEY_x, Gdk.ModifierType.SHIFT_MASK) is False
+    assert should_close_selected_for_key(Gdk.KEY_h, Gdk.ModifierType(0)) is False
+
+
+def test_m_key_marks_selected_session_without_modifiers() -> None:
+    assert should_mark_selected_for_key(Gdk.KEY_m, Gdk.ModifierType(0)) is True
+    assert should_mark_selected_for_key(Gdk.KEY_M, Gdk.ModifierType(0)) is True
+    assert should_mark_selected_for_key(Gdk.KEY_m, Gdk.ModifierType.CONTROL_MASK) is False
+    assert should_mark_selected_for_key(Gdk.KEY_m, Gdk.ModifierType.SHIFT_MASK) is False
+    assert should_mark_selected_for_key(Gdk.KEY_x, Gdk.ModifierType(0)) is False
+
+
+def test_question_key_shows_shortcuts_without_control_modifier() -> None:
+    assert should_show_shortcuts_for_key(Gdk.KEY_question, Gdk.ModifierType(0)) is True
+    assert should_show_shortcuts_for_key(Gdk.KEY_question, Gdk.ModifierType.SHIFT_MASK) is True
+    assert should_show_shortcuts_for_key(Gdk.KEY_question, Gdk.ModifierType.CONTROL_MASK) is False
+    assert should_show_shortcuts_for_key(Gdk.KEY_slash, Gdk.ModifierType(0)) is False
+
+
+def test_r_key_toggles_selected_running_without_modifiers() -> None:
+    assert should_toggle_running_for_key(Gdk.KEY_r, Gdk.ModifierType(0)) is True
+    assert should_toggle_running_for_key(Gdk.KEY_R, Gdk.ModifierType(0)) is True
+    assert should_toggle_running_for_key(Gdk.KEY_r, Gdk.ModifierType.CONTROL_MASK) is False
+    assert should_toggle_running_for_key(Gdk.KEY_r, Gdk.ModifierType.SHIFT_MASK) is False
+    assert should_toggle_running_for_key(Gdk.KEY_m, Gdk.ModifierType(0)) is False
+
+
 def test_moved_selection_key_clamps_and_initializes_selection() -> None:
     keys = [("codex", "one"), ("codex", "two"), ("codex", "three")]
 
@@ -667,6 +702,117 @@ def test_toggle_highlight_selected_returns_false_without_selection() -> None:
     app = FrontendApp()
 
     assert app._toggle_highlight_selected() is False
+
+
+def test_toggle_mark_selected_toggles_mark_and_renders(monkeypatch) -> None:
+    app = FrontendApp()
+    app.expanded = True
+    app.selected_session_key = ("codex", "selected")
+    renders: list[bool] = []
+
+    monkeypatch.setattr(app, "_render", lambda: renders.append(True))
+
+    assert app._toggle_mark_selected() is True
+    assert app.marked_session_keys == {("codex", "selected")}
+
+    assert app._toggle_mark_selected() is True
+    assert app.marked_session_keys == set()
+    assert renders == [True, True]
+
+
+def test_toggle_mark_selected_returns_false_without_expanded_selection() -> None:
+    app = FrontendApp()
+    app.expanded = False
+    app.selected_session_key = ("codex", "selected")
+
+    assert app._toggle_mark_selected() is False
+    assert app.marked_session_keys == set()
+
+
+def test_close_selected_session_terminates_current_selection(monkeypatch) -> None:
+    app = FrontendApp()
+    app.expanded = True
+    app.selected_session_key = ("codex", "selected")
+    app.sessions = [build_session("selected", phase=SessionPhase.RUNNING, updated_at=1)]
+    app.proxy = object()
+    calls: list[tuple[object, str, str]] = []
+
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.terminate_session",
+        lambda proxy, provider, session_id: calls.append((proxy, provider, session_id)) or True,
+    )
+
+    assert app._close_selected_session() is True
+    assert calls == [(app.proxy, "codex", "selected")]
+
+
+def test_close_selected_session_terminates_marked_sessions_first(monkeypatch) -> None:
+    app = FrontendApp()
+    app.expanded = True
+    app.selected_session_key = ("codex", "selected")
+    app.sessions = [
+        build_session("selected", phase=SessionPhase.RUNNING, updated_at=1),
+        build_session("marked-a", phase=SessionPhase.RUNNING, updated_at=2),
+        build_session("marked-b", phase=SessionPhase.RUNNING, updated_at=3),
+    ]
+    app.panel_session_keys = [("codex", "selected"), ("codex", "marked-a"), ("codex", "marked-b")]
+    app.marked_session_keys = {("codex", "marked-a"), ("codex", "marked-b")}
+    app.proxy = object()
+    calls: list[tuple[object, str, str]] = []
+
+    monkeypatch.setattr(app, "_render", lambda: None)
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.terminate_session",
+        lambda proxy, provider, session_id: calls.append((proxy, provider, session_id)) or True,
+    )
+
+    assert app._close_selected_session() is True
+    assert calls == [
+        (app.proxy, "codex", "marked-a"),
+        (app.proxy, "codex", "marked-b"),
+    ]
+    assert app.marked_session_keys == set()
+
+
+def test_close_selected_session_returns_false_when_panel_is_collapsed(monkeypatch) -> None:
+    app = FrontendApp()
+    app.expanded = False
+    app.selected_session_key = ("codex", "selected")
+    app.sessions = [build_session("selected", phase=SessionPhase.RUNNING, updated_at=1)]
+    calls: list[tuple[object, str, str]] = []
+
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.terminate_session",
+        lambda proxy, provider, session_id: calls.append((proxy, provider, session_id)) or True,
+    )
+
+    assert app._close_selected_session() is False
+    assert calls == []
+
+
+def test_close_selected_session_returns_false_without_selection(monkeypatch) -> None:
+    app = FrontendApp()
+    calls: list[tuple[object, str, str]] = []
+
+    monkeypatch.setattr(
+        "linux_agent_island.app.frontend_interactions.terminate_session",
+        lambda proxy, provider, session_id: calls.append((proxy, provider, session_id)) or True,
+    )
+
+    assert app._close_selected_session() is False
+    assert calls == []
+
+
+def test_apply_session_update_prunes_marked_sessions(monkeypatch) -> None:
+    app = FrontendApp()
+    app.marked_session_keys = {("codex", "alive"), ("codex", "gone")}
+
+    monkeypatch.setattr(app, "_schedule_highlight_cleanup", lambda: None)
+    monkeypatch.setattr(app, "_schedule_transcript_refresh", lambda: None)
+
+    app._apply_session_update([build_session("alive", phase=SessionPhase.RUNNING, updated_at=1)])
+
+    assert app.marked_session_keys == {("codex", "alive")}
 
 
 def test_toggle_island_focus_shows_and_remembers_previous_window(monkeypatch) -> None:
